@@ -29,12 +29,14 @@ const getPartnerStats = async (req, res) => {
 // @route   POST /api/partner/discounts
 // @access  Private (Partner)
 const createDiscount = async (req, res) => {
-    const { code, percentage } = req.body;
+    const { code, value, percentage } = req.body;
+    const discountValue = value || percentage;
 
     try {
         const discount = await Discount.create({
-            code,
-            percentage,
+            code: code.toUpperCase(),
+            value: discountValue,
+            type: 'percentage',
             partner: req.user.id,
         });
 
@@ -111,11 +113,60 @@ const getPayoutHistory = async (req, res) => {
     }
 };
 
+// @desc    Register a student by Partner
+// @route   POST /api/partner/register-student
+// @access  Private (Partner)
+const registerStudent = async (req, res) => {
+    const { name, email, password, phone, partnerCode } = req.body;
+
+    try {
+        if (!name || !email || !password) {
+            return res.status(400).json({ message: 'Please provide name, email, and password' });
+        }
+
+        const userExists = await User.findOne({ email });
+        if (userExists) {
+            return res.status(400).json({ message: 'User already exists' });
+        }
+
+        // Verify the partnerCode belongs to this partner
+        if (partnerCode) {
+            const discount = await Discount.findOne({ code: partnerCode.toUpperCase(), partner: req.user.id });
+            if (!discount) {
+                return res.status(400).json({ message: 'Invalid partner code for this account' });
+            }
+        }
+
+        const student = await User.create({
+            name,
+            email,
+            password,
+            role: 'student',
+            partnerCode: partnerCode?.toUpperCase(),
+            isVerified: true,
+            profile: {
+                phone: phone || ''
+            }
+        });
+
+        res.status(201).json({
+            _id: student._id,
+            name: student.name,
+            email: student.email,
+            partnerCode: student.partnerCode,
+            message: 'Student registered successfully'
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 module.exports = {
     getPartnerStats,
     createDiscount,
     getDiscounts,
     requestPayout,
     getPartnerStudents,
+    registerStudent,
     getPayoutHistory
 };

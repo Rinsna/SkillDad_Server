@@ -48,6 +48,21 @@ const enrollInCourse = async (req, res) => {
         totalModules: course.modules?.length || 0,
     });
 
+    // Update student's universityId if the course is hosted by an instructor with role 'university'
+    // This addresses Requirement: "it updates in that particular university students list where student joined course"
+    if (course.instructor) {
+        const student = await User.findById(userId);
+        if (student) {
+            const instructor = await User.findById(course.instructor);
+            // Link if student doesn't have a university yet, or if they joined a university course
+            if (instructor && instructor.role === 'university') {
+                student.universityId = instructor._id;
+                await student.save();
+                console.log(`[Enrollment] Linked student ${student.email} to university ${instructor.name}`);
+            }
+        }
+    }
+
     res.status(201).json(progress);
 };
 

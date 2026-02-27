@@ -134,19 +134,24 @@ const addStudentToGroup = async (req, res) => {
 // @route   POST /api/university/discounts
 // @access  Private (University)
 const createDiscount = async (req, res) => {
-    const { code, percentage } = req.body;
+    const { code, value, percentage } = req.body;
+    const discountValue = value || percentage;
 
     try {
-        const discountExists = await Discount.findOne({ code });
+        if (!code || !discountValue) {
+            return res.status(400).json({ message: 'Code and value/percentage are required' });
+        }
+
+        const discountExists = await Discount.findOne({ code: code.toUpperCase() });
 
         if (discountExists) {
-            res.status(400);
-            throw new Error('Discount code already exists');
+            return res.status(400).json({ message: 'Discount code already exists' });
         }
 
         const discount = await Discount.create({
-            code,
-            percentage,
+            code: code.toUpperCase(),
+            value: discountValue,
+            type: 'percentage',
             partner: req.user.id,
         });
 
