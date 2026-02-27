@@ -19,10 +19,17 @@ let redis = null;
  */
 const getRedis = () => {
     if (redis) return redis;
+
+    // Prevent fallback to localhost which causes infinite loops on Render
+    const redisUrl = process.env.REDIS_URL;
+    if (!redisUrl || redisUrl.includes('localhost') || redisUrl.includes('127.0.0.1')) {
+        return null;
+    }
+
     try {
         const { createClient } = require('redis');
         redis = createClient({
-            url: process.env.REDIS_URL || 'redis://localhost:6379',
+            url: redisUrl,
             socket: {
                 reconnectStrategy: (retries) => Math.min(retries * 100, 3000),
                 connectTimeout: 5000,
