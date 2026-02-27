@@ -14,8 +14,9 @@ const rateLimit = require('express-rate-limit');
  */
 
 const getRedisStore = () => {
-  // If no REDIS_HOST or REDIS_URL is provided, gracefully fallback to MemoryStore 
-  if (!process.env.REDIS_HOST && !process.env.REDIS_URL) {
+  // If REDIS_HOST is 'localhost' or empty, gracefully fallback to MemoryStore.
+  // This absolutely prevents the endless connection loop on Render since there is no local Redis there.
+  if (!process.env.REDIS_HOST || process.env.REDIS_HOST === 'localhost' || process.env.REDIS_HOST === '127.0.0.1') {
     return undefined;
   }
 
