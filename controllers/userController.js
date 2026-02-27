@@ -52,17 +52,8 @@ const registerUser = async (req, res) => {
 
         if (user) {
             console.log('User created successfully:', user._id);
-            // Send welcome notification
-            const notificationService = require('../services/NotificationService');
-            try {
-                await notificationService.send(
-                    { name: user.name, email: user.email, phone: user.profile?.phone },
-                    'welcome'
-                );
-            } catch (emailError) {
-                console.error('Welcome notification failed (non-blocking):', emailError.message);
-            }
 
+            // Send response FIRST - then fire notification in background (non-blocking)
             res.status(201).json({
                 _id: user.id,
                 name: user.name,
@@ -70,6 +61,19 @@ const registerUser = async (req, res) => {
                 role: user.role,
                 isVerified: user.isVerified,
                 token: generateToken(user.id),
+            });
+
+            // Fire-and-forget welcome notification AFTER response is sent
+            setImmediate(async () => {
+                try {
+                    const notificationService = require('../services/NotificationService');
+                    await notificationService.send(
+                        { name: user.name, email: user.email, phone: user.profile?.phone },
+                        'welcome'
+                    );
+                } catch (emailError) {
+                    console.error('Welcome notification failed (non-blocking):', emailError.message);
+                }
             });
         } else {
             res.status(400).json({ message: 'Registration failed. Please try again.' });
