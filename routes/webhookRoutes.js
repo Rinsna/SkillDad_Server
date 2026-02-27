@@ -22,4 +22,13 @@ const { handleZoomWebhook } = require('../controllers/webhookController');
 // Note: No auth middleware - uses signature verification instead
 router.post('/zoom', handleZoomWebhook);
 
+// Health check endpoint for testing
+router.get('/zoom', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Zoom webhook endpoint is active',
+    timestamp: new Date().toISOString()
+  });
+});
+
 module.exports = router;

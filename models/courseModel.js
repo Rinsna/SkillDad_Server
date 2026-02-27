@@ -12,12 +12,12 @@ const videoSchema = mongoose.Schema({
     url: { type: String, required: true }, // Embed URL (YouTube/Vimeo) or Zoom recording URL
     duration: { type: String }, // e.g., "10:05"
     exercises: [exerciseSchema], // Mandatory exercises after video
-    
+
     // Zoom recording integration
-    videoType: { 
-        type: String, 
-        enum: ['external', 'zoom-recording', 'zoom-live'], 
-        default: 'external' 
+    videoType: {
+        type: String,
+        enum: ['external', 'zoom-recording', 'zoom-live'],
+        default: 'external'
     },
     zoomRecording: {
         recordingId: String,
@@ -34,35 +34,33 @@ const videoSchema = mongoose.Schema({
 });
 
 // Video type consistency validation
-videoSchema.pre('validate', function(next) {
+videoSchema.pre('validate', function () {
     // Requirement 8.1: If videoType='zoom-recording', zoomRecording.playUrl must exist
     if (this.videoType === 'zoom-recording') {
         if (!this.zoomRecording || !this.zoomRecording.playUrl) {
-            return next(new Error('zoomRecording.playUrl is required when videoType is "zoom-recording"'));
+            throw new Error('zoomRecording.playUrl is required when videoType is "zoom-recording"');
         }
         // Requirement 8.2: If videoType='zoom-recording', zoomSession reference must exist
         if (!this.zoomSession) {
-            return next(new Error('zoomSession reference is required when videoType is "zoom-recording"'));
+            throw new Error('zoomSession reference is required when videoType is "zoom-recording"');
         }
     }
-    
+
     // Requirement 8.3: If videoType='external', zoomRecording should be null/undefined
     if (this.videoType === 'external') {
         if (this.zoomRecording && (this.zoomRecording.playUrl || this.zoomRecording.recordingId)) {
-            return next(new Error('zoomRecording must be null when videoType is "external"'));
+            throw new Error('zoomRecording must be null when videoType is "external"');
         }
         // Requirement 8.4: If videoType='external', zoomSession should be null/undefined
         if (this.zoomSession) {
-            return next(new Error('zoomSession must be null when videoType is "external"'));
+            throw new Error('zoomSession must be null when videoType is "external"');
         }
     }
-    
+
     // Requirement 8.5: url field must not be null or empty
     if (!this.url || this.url.trim() === '') {
-        return next(new Error('url field must not be null or empty'));
+        throw new Error('url field must not be null or empty');
     }
-    
-    next();
 });
 
 const moduleSchema = mongoose.Schema({
