@@ -14,17 +14,14 @@ const rateLimit = require('express-rate-limit');
  */
 
 const getRedisStore = () => {
-  // If no REDIS_HOST is provided, gracefully fallback to MemoryStore to prevent relentless connection errors on Render.
-  if (!process.env.REDIS_HOST && process.env.NODE_ENV === 'production') {
+  // If no REDIS_HOST or REDIS_URL is provided, gracefully fallback to MemoryStore 
+  if (!process.env.REDIS_HOST && !process.env.REDIS_URL) {
     return undefined;
   }
 
   try {
     const { RedisStore } = require('rate-limit-redis');
     const redis = require('redis');
-
-    // Only try to connect if REDIS_HOST is explicitly available, otherwise skip redis creation
-    if (!process.env.REDIS_HOST) return undefined;
 
     const redisClient = redis.createClient({
       host: process.env.REDIS_HOST || 'localhost',
