@@ -3,6 +3,10 @@ const Course = require('../models/courseModel');
 const Support = require('../models/supportModel');
 const sendEmail = require('../utils/sendEmail');
 const emailTemplates = require('../utils/emailTemplates');
+const PartnerLogo = require('../models/partnerLogoModel');
+const Director = require('../models/directorModel');
+const Enrollment = require('../models/enrollmentModel');
+const Document = require('../models/documentModel');
 
 // @desc    Update entity (partner/university) details + discount rate
 // @route   PUT /api/admin/entities/:id
@@ -343,7 +347,6 @@ const revokePermission = async (req, res) => {
 const getAllStudents = async (req, res) => {
     try {
         const { courseId } = req.query;
-        const Enrollment = require('../models/enrollmentModel');
 
         let studentIds = null;
         if (courseId && courseId !== 'all') {
@@ -382,7 +385,6 @@ const getAllStudents = async (req, res) => {
 // @access  Private (Admin)
 const getStudentDocuments = async (req, res) => {
     try {
-        const Document = require('../models/documentModel');
         const documents = await Document.find({ student: req.params.id });
         res.json(documents);
     } catch (error) {
@@ -467,25 +469,23 @@ const deleteStudent = async (req, res) => {
 };
 
 // Partner Logo Management
-const PartnerLogo = require('../models/partnerLogoModel');
-const Director = require('../models/directorModel');
 
 // @desc    Get all partner logos
 // @route   GET /api/admin/partner-logos
 // @access  Private (Admin)
-const getPartnerLogos = async (req, res) => {
+async function getPartnerLogos(req, res) {
     try {
         const logos = await PartnerLogo.find().sort({ order: 1, createdAt: 1 });
         res.json(logos);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
-};
+}
 
 // @desc    Create partner logo
 // @route   POST /api/admin/partner-logos
 // @access  Private (Admin)
-const createPartnerLogo = async (req, res) => {
+async function createPartnerLogo(req, res) {
     try {
         const { name, order, type, logo: logoUrl, location, students, programs } = req.body;
 
@@ -504,12 +504,12 @@ const createPartnerLogo = async (req, res) => {
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
-};
+}
 
 // @desc    Update partner logo
 // @route   PUT /api/admin/partner-logos/:id
 // @access  Private (Admin)
-const updatePartnerLogo = async (req, res) => {
+async function updatePartnerLogo(req, res) {
     try {
         const { name, order, isActive, type, logo: logoUrl, location, students, programs } = req.body;
 
@@ -533,12 +533,12 @@ const updatePartnerLogo = async (req, res) => {
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
-};
+}
 
 // @desc    Delete partner logo
 // @route   DELETE /api/admin/partner-logos/:id
 // @access  Private (Admin)
-const deletePartnerLogo = async (req, res) => {
+async function deletePartnerLogo(req, res) {
     try {
         const logo = await PartnerLogo.findById(req.params.id);
 
@@ -551,26 +551,26 @@ const deletePartnerLogo = async (req, res) => {
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
-};
+}
 
 // Director Management
 
 // @desc    Get all directors
 // @route   GET /api/admin/directors
 // @access  Private (Admin)
-const getDirectors = async (req, res) => {
+async function getDirectors(req, res) {
     try {
         const directors = await Director.find().sort({ order: 1, createdAt: 1 });
         res.json(directors);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
-};
+}
 
 // @desc    Create director
 // @route   POST /api/admin/directors
 // @access  Private (Admin)
-const createDirector = async (req, res) => {
+async function createDirector(req, res) {
     try {
         const { name, title, image, order } = req.body;
 
@@ -586,12 +586,12 @@ const createDirector = async (req, res) => {
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
-};
+}
 
 // @desc    Update director
 // @route   PUT /api/admin/directors/:id
 // @access  Private (Admin)
-const updateDirector = async (req, res) => {
+async function updateDirector(req, res) {
     try {
         const { name, title, image, order, isActive } = req.body;
 
@@ -612,12 +612,12 @@ const updateDirector = async (req, res) => {
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
-};
+}
 
 // @desc    Delete director
 // @route   DELETE /api/admin/directors/:id
 // @access  Private (Admin)
-const deleteDirector = async (req, res) => {
+async function deleteDirector(req, res) {
     try {
         const director = await Director.findById(req.params.id);
 
@@ -630,12 +630,12 @@ const deleteDirector = async (req, res) => {
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
-};
+}
 
 // @desc    Invite new user & send email
 // @route   POST /api/admin/users/invite
 // @access  Private (Admin)
-const inviteUser = async (req, res) => {
+async function inviteUser(req, res) {
     try {
         const { name, email, password, role, universityId } = req.body;
 
@@ -694,19 +694,19 @@ const inviteUser = async (req, res) => {
         console.error('Invite user error:', error);
         res.status(500).json({ message: error.message || 'Server error inviting user' });
     }
-};
+}
 
 // @desc    Get all universities
 // @route   GET /api/admin/universities
 // @access  Private (Admin)
-const getUniversities = async (req, res) => {
+async function getUniversities(req, res) {
     try {
         const universities = await User.find({ role: 'university' }).select('name profile');
         res.json(universities);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
-};
+}
 
 module.exports = {
     updateEntity,
