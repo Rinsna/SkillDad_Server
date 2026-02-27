@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily Reconciliation Summary - SkillDad</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f4f4;
+        }
+        .email-container {
+            max-width: 700px;
+            margin: 0 auto;
+            background-color: #ffffff;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 40px 20px;
+            text-align: center;
+        }
+        .header h1 {
+            color: #ffffff;
+            margin: 0;
+            font-size: 28px;
+        }
+        .header p {
+            color: #e0e7ff;
+            margin: 10px 0 0 0;
+            font-size: 16px;
+        }
+        .content {
+            padding: 40px 30px;
+        }
+        .content h2 {
+            color: #1f2937;
+            font-size: 24px;
+            margin-bottom: 20px;
+        }
+        .content p {
+            color: #4b5563;
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin: 25px 0;
+        }
+        .summary-card {
+            background-color: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+        }
+        .summary-card.success {
+            background-color: #f0fdf4;
+            border-color: #86efac;
+        }
+        .summary-card.warning {
+            background-color: #fef3c7;
+            border-color: #fcd34d;
+        }
+        .summary-card.error {
+            background-color: #fef2f2;
+            border-color: #fecaca;
+        }
+        .summary-card-label {
+            color: #6b7280;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+        .summary-card-value {
+            color: #1f2937;
+            font-size: 28px;
+            font-weight: 700;
+        }
+        .summary-card.success .summary-card-value {
+            color: #16a34a;
+        }
+        .summary-card.warning .summary-card-value {
+            color: #ca8a04;
+        }
+        .summary-card.error .summary-card-value {
+            color: #dc2626;
+        }
+        .amount-summary {
+            background-color: #eff6ff;
+            border-left: 4px solid #3b82f6;
+            padding: 20px;
+            margin: 25px 0;
+        }
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #dbeafe;
+        }
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+        .detail-label {
+            color: #6b7280;
+            font-weight: 500;
+        }
+        .detail-value {
+            color: #1f2937;
+            font-weight: 600;
+        }
+        .discrepancy-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 14px;
+        }
+        .discrepancy-table th {
+            background-color: #f3f4f6;
+            color: #374151;
+            font-weight: 600;
+            padding: 12px;
+            text-align: left;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        .discrepancy-table td {
+            padding: 12px;
+            border-bottom: 1px solid #e5e7eb;
+            color: #4b5563;
+        }
+        .discrepancy-table tr:hover {
+            background-color: #f9fafb;
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .badge-error {
+            background-color: #fee2e2;
+            color: #991b1b;
+        }
+        .badge-warning {
+            background-color: #fef3c7;
+            color: #92400e;
+        }
+        .button {
+            display: inline-block;
+            padding: 14px 32px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #ffffff;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            margin: 20px 0;
+        }
+        .footer {
+            background-color: #1f2937;
+            color: #9ca3af;
+            padding: 30px;
+            text-align: center;
+            font-size: 14px;
+        }
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        .divider {
+            height: 1px;
+            background-color: #e5e7eb;
+            margin: 30px 0;
+        }
+        @media only screen and (max-width: 700px) {
+            .summary-cards {
+                grid-template-columns: 1fr;
+            }
+            .content {
+                padding: 30px 20px;
+            }
+            .discrepancy-table {
+                font-size: 12px;
+            }
+            .discrepancy-table th,
+            .discrepancy-table td {
+                padding: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <div class="header">
+            <h1>SkillDad Finance</h1>
+            <p>Daily Payment Reconciliation Report</p>
+        </div>
+        
+        <div class="content">
+            <h2>Reconciliation Summary for {{reconciliationDate}}</h2>
+            <p>Dear Finance Team,</p>
+            <p>Here is the automated daily reconciliation summary for payment transactions processed on {{reconciliationDate}}.</p>
+            
+            <div class="summary-cards">
+                <div class="summary-card">
+                    <div class="summary-card-label">Total Transactions</div>
+                    <div class="summary-card-value">{{totalTransactions}}</div>
+                </div>
+                <div class="summary-card success">
+                    <div class="summary-card-label">Matched Transactions</div>
+                    <div class="summary-card-value">{{matchedTransactions}}</div>
+                </div>
+                <div class="summary-card {{#if unmatchedTransactions}}error{{else}}success{{/if}}">
+                    <div class="summary-card-label">Unmatched Transactions</div>
+                    <div class="summary-card-value">{{unmatchedTransactions}}</div>
+                </div>
+                <div class="summary-card {{#if discrepancyCount}}warning{{else}}success{{/if}}">
+                    <div class="summary-card-label">Discrepancies Found</div>
+                    <div class="summary-card-value">{{discrepancyCount}}</div>
+                </div>
+            </div>
+            
+            <div class="amount-summary">
+                <h3 style="margin-top: 0; color: #1f2937;">Financial Summary</h3>
+                <div class="detail-row">
+                    <span class="detail-label">Total Payment Amount:</span>
+                    <span class="detail-value">₹{{totalAmount}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Settled Amount:</span>
+                    <span class="detail-value">₹{{settledAmount}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Pending Amount:</span>
+                    <span class="detail-value">₹{{pendingAmount}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Refunds Processed:</span>
+                    <span class="detail-value">₹{{refundAmount}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Net Settlement:</span>
+                    <span class="detail-value" style="color: #3b82f6; font-size: 20px;">₹{{netSettlement}}</span>
+                </div>
+            </div>
+            
+            {{#if hasDiscrepancies}}
+            <div class="divider"></div>
+            
+            <h3 style="color: #dc2626;">⚠️ Discrepancies Requiring Attention</h3>
+            <p style="color: #6b7280; font-size: 14px;">The following transactions have discrepancies that need to be reviewed and resolved:</p>
+            
+            <table class="discrepancy-table">
+                <thead>
+                    <tr>
+                        <th>Transaction ID</th>
+                        <th>Type</th>
+                        <th>System Amount</th>
+                        <th>Gateway Amount</th>
+                        <th>Difference</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{#each discrepancies}}
+                    <tr>
+                        <td>{{this.transactionId}}</td>
+                        <td>
+                            {{#if (eq this.type 'missing_in_system')}}
+                            <span class="badge badge-error">Missing in System</span>
+                            {{else if (eq this.type 'missing_in_gateway')}}
+                            <span class="badge badge-error">Missing in Gateway</span>
+                            {{else if (eq this.type 'amount_mismatch')}}
+                            <span class="badge badge-warning">Amount Mismatch</span>
+                            {{else if (eq this.type 'status_mismatch')}}
+                            <span class="badge badge-warning">Status Mismatch</span>
+                            {{/if}}
+                        </td>
+                        <td>₹{{this.systemAmount}}</td>
+                        <td>₹{{this.gatewayAmount}}</td>
+                        <td style="color: #dc2626; font-weight: 600;">₹{{this.difference}}</td>
+                    </tr>
+                    {{/each}}
+                </tbody>
+            </table>
+            {{/if}}
+            
+            <center>
+                <a href="{{reconciliationDashboardUrl}}" class="button">View Full Report</a>
+                {{#if hasDiscrepancies}}
+                <a href="{{resolveDiscrepanciesUrl}}" class="button" style="background: #dc2626;">Resolve Discrepancies</a>
+                {{/if}}
+            </center>
+            
+            <div class="divider"></div>
+            
+            <p style="font-size: 14px; color: #6b7280;">
+                <strong>Report Details:</strong><br>
+                • Reconciliation ID: {{reconciliationId}}<br>
+                • Report Generated: {{reportGeneratedDate}}<br>
+                • Period: {{startDate}} to {{endDate}}<br>
+                • Status: {{reconciliationStatus}}
+            </p>
+            
+            {{#if hasDiscrepancies}}
+            <p style="font-size: 14px; color: #dc2626; background-color: #fef2f2; padding: 15px; border-radius: 6px; border: 1px solid #fecaca;">
+                <strong>Action Required:</strong> Please review and resolve the discrepancies listed above within 24 hours. 
+                Unresolved discrepancies may affect financial reporting and settlement processing.
+            </p>
+            {{else}}
+            <p style="font-size: 14px; color: #16a34a; background-color: #f0fdf4; padding: 15px; border-radius: 6px; border: 1px solid #86efac;">
+                <strong>✓ All Clear:</strong> No discrepancies found. All transactions are properly reconciled.
+            </p>
+            {{/if}}
+            
+            <p style="font-size: 14px; color: #6b7280;">
+                For questions or assistance with this reconciliation report, please contact the finance operations team at 
+                <a href="mailto:finance@skilldad.com" style="color: #667eea;">finance@skilldad.com</a>
+            </p>
+        </div>
+        
+        <div class="footer">
+            <p><strong>SkillDad Finance Operations</strong></p>
+            <p>Automated Reconciliation System</p>
+            <p>
+                <a href="{{dashboardUrl}}">Finance Dashboard</a> | 
+                <a href="{{reportsUrl}}">Reports</a> | 
+                <a href="{{supportUrl}}">Support</a>
+            </p>
+            <p style="font-size: 12px; margin-top: 20px;">
+                GSTIN: {{companyGSTIN}}<br>
+                {{companyAddress}}
+            </p>
+            <p style="font-size: 12px; color: #6b7280; margin-top: 20px;">
+                This is an automated email generated by the SkillDad reconciliation system.<br>
+                Please do not reply to this message.
+            </p>
+        </div>
+    </div>
+</body>
+</html>

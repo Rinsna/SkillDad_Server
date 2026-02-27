@@ -1,0 +1,99 @@
+const express = require('express');
+const cors = require('cors');
+const cookieParser = require('cookie-parser');
+const dotenv = require('dotenv');
+const path = require('path');
+
+// Load env vars from the correct path regardless of where it's run from
+dotenv.config({ path: path.join(__dirname, '.env') });
+
+const connectDB = require('./config/db');
+const { errorHandler } = require('./middleware/errorMiddleware');
+const jobScheduler = require('./jobs');
+const http = require('http');
+const socketService = require('./services/SocketService');
+
+connectDB();
+
+const app = express();
+app.use(cookieParser());
+const server = http.createServer(app);
+
+// Initialize Socket.io
+socketService.init(server);
+
+// Middleware
+app.use(express.json({
+  verify: (req, res, buf) => {
+    if (req.originalUrl.startsWith('/api/payment/webhook')) {
+      req.rawBody = buf;
+    }
+  }
+}));
+app.use(cors());
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Routes
+app.use('/api/users', require('./routes/userRoutes'));
+app.use('/api/courses', require('./routes/courseRoutes'));
+app.use('/api/enrollment', require('./routes/enrollmentRoutes'));
+app.use('/api/university', require('./routes/universityRoutes'));
+app.use('/api/partner', require('./routes/partnerRoutes'));
+app.use('/api/admin', require('./routes/adminRoutes'));
+app.use('/api/sessions', require('./routes/liveSessionRoutes'));
+app.use('/api/finance', require('./routes/financeRoutes'));
+app.use('/api/enquiries', require('./routes/enquiryRoutes'));
+app.use('/api/exams', require('./routes/examRoutes'));
+app.use('/api/documents', require('./routes/documentRoutes'));
+app.use('/api/projects', require('./routes/projectRoutes'));
+app.use('/api/support', require('./routes/supportRoutes'));
+app.use('/api/public', require('./routes/publicRoutes'));
+app.use('/api/notifications', require('./routes/notificationRoutes'));
+app.use('/api/webhooks', require('./routes/webhookRoutes'));
+app.use('/api/discount', require('./routes/discountRoutes'));
+
+// Payment Routes
+app.use('/api/payment', require('./routes/paymentRoutes'));
+app.use('/api/admin/payment', require('./routes/adminPaymentRoutes'));
+app.use('/api/admin/reconciliation', require('./routes/reconciliationRoutes'));
+app.use('/api/admin/monitoring', require('./routes/monitoringRoutes'));
+
+
+app.get('/', (req, res) => {
+  res.send('API is running...');
+});
+
+app.use(errorHandler);
+
+// Initialize scheduled jobs
+try {
+  jobScheduler.initializeJobs();
+  console.log('Scheduled jobs initialized successfully');
+} catch (error) {
+  console.error('Failed to initialize scheduled jobs:', error);
+}
+
+const PORT = process.env.PORT || 3030;
+console.log('[Server] Attempting to start on port:', PORT);
+
+// Log warning if ZOOM_MOCK_MODE is enabled (Requirement 13.4)
+if (process.env.ZOOM_MOCK_MODE === 'true') {
+  console.warn('');
+  console.warn('⚠️  ═══════════════════════════════════════════════════════════════');
+  console.warn('⚠️  WARNING: ZOOM_MOCK_MODE IS ENABLED');
+  console.warn('⚠️  ═══════════════════════════════════════════════════════════════');
+  console.warn('⚠️  ');
+  console.warn('⚠️  Zoom integration is running in MOCK MODE for development.');
+  console.warn('⚠️  ');
+  console.warn('⚠️  - Mock Zoom meetings will be created (no real Zoom API calls)');
+  console.warn('⚠️  - Mock recording data will be generated automatically');
+  console.warn('⚠️  - Webhook simulator available for testing');
+  console.warn('⚠️  ');
+  console.warn('⚠️  DO NOT USE IN PRODUCTION!');
+  console.warn('⚠️  Set ZOOM_MOCK_MODE=false and configure real Zoom credentials.');
+  console.warn('⚠️  ');
+  console.warn('⚠️  ═══════════════════════════════════════════════════════════════');
+  console.warn('');
+}
+
+server.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));

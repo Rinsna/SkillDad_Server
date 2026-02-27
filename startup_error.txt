@@ -1,0 +1,186 @@
+﻿[dotenv@17.3.1] injecting env (17) from .env -- tip: ≡ƒ¢í∩╕Å auth for agents: https://vestauth.com
+node : ValidationError: 
+Custom keyGenerator appears 
+to use request IP without 
+calling the ipKeyGenerator 
+helper function for IPv6 
+addresses. This could allow 
+IPv6 users to bypass 
+limits. See https://express-
+rate-limit.github.io/ERR_ERL
+_KEY_GEN_IPV6/ for more 
+information.
+At line:1 char:12
++ cd server; node server.js 
+2>&1 | Out-File -FilePath 
+startup_error.txt ...
++            
+~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          
+    : NotSpecified: (Valid  
+  ationError...re informa   
+ tion.:String) [], Remot    
+eException
+    + FullyQualifiedErrorId 
+    : NativeCommandError
+ 
+    at Object.keyGeneratorIp
+Fallback (C:\Users\dell\Desk
+top\SkillDad\server\node_mod
+ules\express-rate-limit\dist
+\index.cjs:637:13)
+    at wrappedValidations.<c
+omputed> [as 
+keyGeneratorIpFallback] (C:\
+Users\dell\Desktop\SkillDad\
+server\node_modules\express-
+rate-limit\dist\index.cjs:68
+0:22)
+    at parseOptions (C:\User
+s\dell\Desktop\SkillDad\serv
+er\node_modules\express-rate
+-limit\dist\index.cjs:750:16
+)
+    at rateLimit (C:\Users\d
+ell\Desktop\SkillDad\server\
+node_modules\express-rate-li
+mit\dist\index.cjs:831:18)
+    at Object.<anonymous> (C
+:\Users\dell\Desktop\SkillDa
+d\server\middleware\rateLimi
+ter.js:29:30)
+    at Module._compile (node
+:internal/modules/cjs/loader
+:1761:14)
+    at Object..js (node:inte
+rnal/modules/cjs/loader:1893
+:10)
+    at Module.load (node:int
+ernal/modules/cjs/loader:148
+1:32)
+    at Module._load (node:in
+ternal/modules/cjs/loader:13
+00:12)
+    at 
+TracingChannel.traceSync (no
+de:diagnostics_channel:328:1
+4) {
+  code: 
+'ERR_ERL_KEY_GEN_IPV6',
+  help: 'https://express-rat
+e-limit.github.io/ERR_ERL_KE
+Y_GEN_IPV6/'
+}
+ValidationError: Custom 
+keyGenerator appears to use 
+request IP without calling 
+the ipKeyGenerator helper 
+function for IPv6 
+addresses. This could allow 
+IPv6 users to bypass 
+limits. See https://express-
+rate-limit.github.io/ERR_ERL
+_KEY_GEN_IPV6/ for more 
+information.
+    at Object.keyGeneratorIp
+Fallback (C:\Users\dell\Desk
+top\SkillDad\server\node_mod
+ules\express-rate-limit\dist
+\index.cjs:637:13)
+    at wrappedValidations.<c
+omputed> [as 
+keyGeneratorIpFallback] (C:\
+Users\dell\Desktop\SkillDad\
+server\node_modules\express-
+rate-limit\dist\index.cjs:68
+0:22)
+    at parseOptions (C:\User
+s\dell\Desktop\SkillDad\serv
+er\node_modules\express-rate
+-limit\dist\index.cjs:750:16
+)
+    at rateLimit (C:\Users\d
+ell\Desktop\SkillDad\server\
+node_modules\express-rate-li
+mit\dist\index.cjs:831:18)
+    at Object.<anonymous> (C
+:\Users\dell\Desktop\SkillDa
+d\server\middleware\rateLimi
+ter.js:37:26)
+    at Module._compile (node
+:internal/modules/cjs/loader
+:1761:14)
+    at Object..js (node:inte
+rnal/modules/cjs/loader:1893
+:10)
+    at Module.load (node:int
+ernal/modules/cjs/loader:148
+1:32)
+    at Module._load (node:in
+ternal/modules/cjs/loader:13
+00:12)
+    at 
+TracingChannel.traceSync (no
+de:diagnostics_channel:328:1
+4) {
+  code: 
+'ERR_ERL_KEY_GEN_IPV6',
+  help: 'https://express-rat
+e-limit.github.io/ERR_ERL_KE
+Y_GEN_IPV6/'
+}
+Server running on port 5000
+node:events:486
+      throw er; // 
+Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: 
+address already in use 
+:::5000
+    at 
+Server.setupListenHandle 
+[as _listen2] 
+(node:net:1940:16)
+    at listenInCluster 
+(node:net:1997:12)
+    at Server.listen 
+(node:net:2102:7)
+    at app.listen (C:\Users\
+dell\Desktop\SkillDad\server
+\node_modules\express\lib\ap
+plication.js:605:24)
+    at Object.<anonymous> (C
+:\Users\dell\Desktop\SkillDa
+d\server\server.js:45:5)
+    at Module._compile (node
+:internal/modules/cjs/loader
+:1761:14)
+    at Object..js (node:inte
+rnal/modules/cjs/loader:1893
+:10)
+    at Module.load (node:int
+ernal/modules/cjs/loader:148
+1:32)
+    at Module._load (node:in
+ternal/modules/cjs/loader:13
+00:12)
+    at 
+TracingChannel.traceSync (no
+de:diagnostics_channel:328:1
+4)
+Emitted 'error' event on 
+Server instance at:
+    at emitErrorNT 
+(node:net:1976:8)
+    at process.processTicksA
+ndRejections (node:internal/
+process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 5000
+}
+
+Node.js v24.11.1
