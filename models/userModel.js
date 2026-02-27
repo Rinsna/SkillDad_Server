@@ -64,8 +64,8 @@ userSchema.pre('save', async function () {
     if (!this.isModified('password')) {
         return;
     }
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
+    // 8 rounds = 256 iterations, still very secure and 4x faster than 10 rounds
+    this.password = await bcrypt.hash(this.password, 8);
 });
 
 userSchema.methods.matchPassword = async function (enteredPassword) {

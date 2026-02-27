@@ -63,6 +63,11 @@ app.get('/', (req, res) => {
   res.send('API is running...');
 });
 
+// Health check endpoint (used by keep-alive ping and uptime monitors)
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 app.use(errorHandler);
 
 // Initialize scheduled jobs
@@ -96,4 +101,22 @@ if (process.env.ZOOM_MOCK_MODE === 'true') {
   console.warn('');
 }
 
-server.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running on port ${PORT}`);
+
+  // Self-ping every 14 minutes to prevent Render free-tier cold starts
+  // Render spins down after 15 minutes of inactivity
+  if (process.env.NODE_ENV === 'production' && process.env.RENDER_EXTERNAL_URL) {
+    const pingUrl = `${process.env.RENDER_EXTERNAL_URL}/health`;
+    setInterval(() => {
+      const https = require('https');
+      const http = require('http');
+      const client = pingUrl.startsWith('https') ? https : http;
+      client.get(pingUrl, (res) => {
+        console.log(`[KeepAlive] Ping ${pingUrl} -> ${res.statusCode}`);
+      }).on('error', (err) => {
+        console.warn('[KeepAlive] Ping failed:', err.message);
+      });
+    }, 14 * 60 * 1000); // every 14 minutes
+  }
+});
