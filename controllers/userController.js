@@ -16,56 +16,51 @@ const generateToken = (id) => {
 // @access  Public
 const registerUser = async (req, res) => {
     try {
-        const { name, email, password, role, phone } = req.body;
-        console.log('Registration attempt:', { name, email, role, phone });
+        const { name, email, password, phone } = req.body;
+        console.log('Registration attempt:', { name, email, phone: phone ? 'provided' : 'missing' });
 
+        // Basic field validation
         if (!name || !email || !password) {
-            console.log('Registration failed: Missing fields');
-            return res.status(400).json({ message: 'Please add all fields' });
+            return res.status(400).json({ message: 'Please provide your name, email, and password.' });
+        }
+
+        // Phone is mandatory for all public registrations (students)
+        if (!phone || phone.trim() === '') {
+            return res.status(400).json({ message: 'WhatsApp number is required.' });
         }
 
         // Check if user exists
         const userExists = await User.findOne({ email });
-
         if (userExists) {
-            console.log('Registration failed: User exists -', email);
-            return res.status(400).json({ message: 'User already exists' });
+            return res.status(400).json({ message: 'An account with this email already exists. Please login.' });
         }
 
-        // Create user - automatically verified for all roles except admin
-        const userRole = role || 'student';
-        const autoVerifyRoles = ['student', 'partner', 'university', 'finance'];
-
-        console.log('Creating user document...');
+        // Public registration ONLY creates student accounts
+        // Universities and B2B partners are created by admin only
+        console.log('Creating student user...');
         const user = await User.create({
             name,
             email,
             password,
-            role: userRole,
-            isVerified: autoVerifyRoles.includes(userRole), // Auto-verify all except admin
-            discountRate: Number(req.body.discountRate) || 0,
+            role: 'student',
+            isVerified: true,
+            discountRate: 0,
             profile: {
-                phone: phone || ''
+                phone: phone.trim()
             }
         });
 
         if (user) {
             console.log('User created successfully:', user._id);
-            // Trigger Industrial Notification Engine for Onboarding
+            // Send welcome notification
             const notificationService = require('../services/NotificationService');
             try {
-                console.log('Attempting to send welcome notification...');
                 await notificationService.send(
-                    {
-                        name: user.name,
-                        email: user.email,
-                        phone: user.profile?.phone
-                    },
+                    { name: user.name, email: user.email, phone: user.profile?.phone },
                     'welcome'
                 );
-                console.log('Welcome notification process initiated');
             } catch (emailError) {
-                console.error('Core Background Sync Failed (Welcome Notif):', emailError);
+                console.error('Welcome notification failed (non-blocking):', emailError.message);
             }
 
             res.status(201).json({
@@ -77,8 +72,7 @@ const registerUser = async (req, res) => {
                 token: generateToken(user.id),
             });
         } else {
-            console.log('Registration failed: User creation returned null');
-            res.status(400).json({ message: 'Invalid user data' });
+            res.status(400).json({ message: 'Registration failed. Please try again.' });
         }
     } catch (error) {
         console.error('CRITICAL REGISTRATION ERROR:', error);
