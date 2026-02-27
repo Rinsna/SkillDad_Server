@@ -85,6 +85,39 @@ const getAdminCourses = asyncHandler(async (req, res) => {
 // @route   GET /api/courses/:id
 // @access  Public
 const getCourse = asyncHandler(async (req, res) => {
+    // Handle frontend fallback courses safely
+    if (req.params.id === 'mock1') {
+        return res.status(200).json({
+            _id: 'mock1',
+            title: 'Complete Web Development Bootcamp 2024',
+            description: 'Master HTML, CSS, JavaScript, React, Node.js and more.',
+            thumbnail: 'https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&q=80&w=800',
+            category: 'Web Development',
+            price: 99,
+            instructor: { name: 'Dr. Angela Yu', role: 'university', profile: { universityName: 'London App Brewery' } },
+            modules: []
+        });
+    }
+
+    if (req.params.id === 'mock2') {
+        return res.status(200).json({
+            _id: 'mock2',
+            title: 'Advanced AI & Machine Learning',
+            description: 'Learn deep learning, neural networks, and computer vision.',
+            thumbnail: 'https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&q=80&w=800',
+            category: 'Artificial Intelligence',
+            price: 149,
+            instructor: { name: 'Prof. Andrew Ng', role: 'university', profile: { universityName: 'Stanford Online' } },
+            modules: []
+        });
+    }
+
+    // Protect against severe DB CastErrors for invalid IDs
+    if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+        res.status(404);
+        throw new Error('Course not found');
+    }
+
     const course = await Course.findById(req.params.id)
         .populate({
             path: 'instructor',
