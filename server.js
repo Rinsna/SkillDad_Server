@@ -126,15 +126,21 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 
   // Self-ping every 14 minutes to prevent Render free-tier cold starts
-  // Render spins down after 15 minutes of inactivity
-  if (process.env.NODE_ENV === 'production' && process.env.RENDER_EXTERNAL_URL) {
-    const pingUrl = `${process.env.RENDER_EXTERNAL_URL}/health`;
+  // Render spins down after 15 minutes of inactivity on the free plan
+  if (process.env.NODE_ENV === 'production') {
+    // Use RENDER_EXTERNAL_URL if set, otherwise fall back to the hardcoded Render URL
+    const pingUrl = process.env.RENDER_EXTERNAL_URL
+      ? `${process.env.RENDER_EXTERNAL_URL}/health`
+      : 'https://skilldad-server.onrender.com/health';
+
+    console.log(`[KeepAlive] Starting self-ping every 14 min -> ${pingUrl}`);
+
     setInterval(() => {
       const https = require('https');
       const http = require('http');
       const client = pingUrl.startsWith('https') ? https : http;
       client.get(pingUrl, (res) => {
-        console.log(`[KeepAlive] Ping ${pingUrl} -> ${res.statusCode}`);
+        console.log(`[KeepAlive] Ping -> ${res.statusCode}`);
       }).on('error', (err) => {
         console.warn('[KeepAlive] Ping failed:', err.message);
       });
