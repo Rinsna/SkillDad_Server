@@ -1,12 +1,17 @@
 const asyncHandler = require('express-async-handler');
 const Course = require('../models/courseModel');
 
-// @desc    Get all courses
-// @route   GET /api/courses
+// @desc    Get all courses (optionally filtered by university)
+// @route   GET /api/courses?university=<userId>
 // @access  Public
 const getCourses = asyncHandler(async (req, res) => {
     try {
         let filter = { isPublished: true };
+
+        // Filter by university (instructor) if provided
+        if (req.query.university) {
+            filter.instructor = req.query.university;
+        }
 
         const courses = await Course.find(filter)
             .populate({
@@ -16,9 +21,7 @@ const getCourses = asyncHandler(async (req, res) => {
             })
             .lean();
 
-        // Ensure each course has necessary fields for the frontend
         const validCourses = courses.map(course => {
-            // Re-map fields to ensure consistency
             return {
                 ...course,
                 title: course.title || 'Untitled Course',
@@ -42,6 +45,7 @@ const getCourses = asyncHandler(async (req, res) => {
         res.status(500).json({ message: 'Error fetching courses', error: error.message });
     }
 });
+
 
 // @desc    Get all courses (Admin/Instructor version)
 // @route   GET /api/admin/courses
