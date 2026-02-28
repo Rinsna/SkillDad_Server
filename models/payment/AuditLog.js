@@ -20,20 +20,20 @@ const auditLogSchema = mongoose.Schema({
     ],
     index: true,
   },
-  
+
   // Transaction Reference
   transactionId: {
     type: String,
     index: true,
   },
-  
+
   // User Information
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     index: true,
   },
-  
+
   // Request Information
   ipAddress: {
     type: String,
@@ -41,24 +41,23 @@ const auditLogSchema = mongoose.Schema({
   userAgent: {
     type: String,
   },
-  
+
   // Event Details
   details: {
     type: mongoose.Schema.Types.Mixed,
   },
-  
+
   // Severity Level
   severity: {
     type: String,
     enum: ['info', 'warning', 'error', 'critical'],
     default: 'info',
   },
-  
+
   // Timestamp
   timestamp: {
     type: Date,
     default: Date.now,
-    index: true,
   },
 }, {
   timestamps: true,
