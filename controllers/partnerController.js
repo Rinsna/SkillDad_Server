@@ -64,13 +64,14 @@ const getDiscounts = async (req, res) => {
 // @route   POST /api/partner/payout
 // @access  Private (Partner)
 const requestPayout = async (req, res) => {
-    const { amount } = req.body;
+    const { amount, notes } = req.body;
 
     try {
         // In a real app, verify partner has enough earnings
         const payout = await Payout.create({
             partner: req.user.id,
             amount,
+            notes: notes || 'Pariout request',
             status: 'pending',
         });
 
@@ -129,12 +130,13 @@ const registerStudent = async (req, res) => {
             return res.status(400).json({ message: 'User already exists' });
         }
 
-        // Verify the partnerCode belongs to this partner
-        if (partnerCode) {
-            const discount = await Discount.findOne({ code: partnerCode.toUpperCase(), partner: req.user.id });
-            if (!discount) {
-                return res.status(400).json({ message: 'Invalid partner code for this account' });
-            }
+        if (!partnerCode) {
+            return res.status(400).json({ message: 'Affiliation code is required to register a student under your network.' });
+        }
+
+        const discount = await Discount.findOne({ code: partnerCode.toUpperCase(), partner: req.user.id });
+        if (!discount) {
+            return res.status(400).json({ message: 'Invalid or unauthorized affiliation code for this account.' });
         }
 
         const student = await User.create({

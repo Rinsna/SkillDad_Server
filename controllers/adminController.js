@@ -51,6 +51,29 @@ const updateEntity = async (req, res) => {
         const saved = await user.save();
         console.log('[updateEntity] saved:', saved._id, saved.discountRate);
 
+        if (saved.role === 'partner' && discountRate !== undefined && discountRate !== null) {
+            const Discount = require('../models/discountModel');
+            const newCode = (saved.name.replace(/\s+/g, '').substring(0, 6) + saved.discountRate).toUpperCase();
+
+            // Look for existing discount code for this partner
+            let discountDoc = await Discount.findOne({ partner: saved._id });
+            if (discountDoc) {
+                discountDoc.value = saved.discountRate;
+                discountDoc.code = newCode;
+                await discountDoc.save();
+            } else {
+                await Discount.create({
+                    code: newCode,
+                    value: saved.discountRate,
+                    type: 'percentage',
+                    partner: saved._id,
+                    active: true,
+                    uses: 0,
+                    maxUses: 9999
+                });
+            }
+        }
+
         return res.json({
             _id: saved._id,
             name: saved.name,
@@ -257,8 +280,30 @@ const getPartnerDetails = async (req, res) => {
     try {
         const partner = await User.findById(req.params.id).select('-password');
         if (partner) {
-            // Fetch associated discounts/stats here
-            res.json(partner);
+            const Discount = require('../models/discountModel');
+            const Payout = require('../models/payoutModel');
+
+            const discounts = await Discount.find({ partner: partner._id });
+            const codes = discounts.map(d => d.code);
+
+            const studentsCount = await User.countDocuments({
+                partnerCode: { $in: codes },
+                role: 'student'
+            });
+
+            const payouts = await Payout.find({ partner: partner._id });
+            const pendingPayouts = payouts.filter(p => p.status === 'pending').reduce((sum, p) => sum + p.amount, 0);
+            const approvedPayouts = payouts.filter(p => p.status === 'approved').reduce((sum, p) => sum + p.amount, 0);
+
+            res.json({
+                ...partner.toObject(),
+                stats: {
+                    totalCodes: discounts.length,
+                    studentsCount,
+                    pendingPayouts,
+                    totalEarnings: approvedPayouts
+                }
+            });
         } else {
             res.status(404).json({ message: 'Partner not found' });
         }
