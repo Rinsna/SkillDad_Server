@@ -119,11 +119,14 @@ const getZoomAccessToken = async (sessionId = null, operation = 'unknown') => {
       throw error;
     }
 
-    const tokenUrl = `https://zoom.us/oauth/token?grant_type=account_credentials&account_id=${ZOOM_ACCOUNT_ID}`;
+    const tokenUrl = 'https://zoom.us/oauth/token';
+    const params = new URLSearchParams();
+    params.append('grant_type', 'account_credentials');
+    params.append('account_id', ZOOM_ACCOUNT_ID.trim());
 
-    const response = await axios.post(tokenUrl, {}, {
+    const response = await axios.post(tokenUrl, params.toString(), {
       headers: {
-        'Authorization': `Basic ${Buffer.from(`${ZOOM_API_KEY}:${ZOOM_API_SECRET}`).toString('base64')}`,
+        'Authorization': `Basic ${Buffer.from(`${ZOOM_API_KEY.trim()}:${ZOOM_API_SECRET.trim()}`).toString('base64')}`,
         'Content-Type': 'application/x-www-form-urlencoded'
       }
     });
