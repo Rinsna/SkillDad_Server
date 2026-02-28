@@ -165,7 +165,8 @@ const getZoomAccessToken = async (sessionId = null, operation = 'unknown') => {
 
     // Log all other errors with details
     console.error(`[Zoom Error] Session: ${sessionId || 'N/A'}, Operation: ${operation}, Error: ${error.response?.data?.message || error.message}, Status: ${error.response?.status || 'N/A'}, Details: ${JSON.stringify(error.response?.data || {})}`);
-    const genericError = new Error('Failed to generate Zoom access token');
+    const zoomDetail = error.response?.data?.errorMessage || error.response?.data?.reason || error.response?.data?.error || error.message;
+    const genericError = new Error(`Failed to generate Zoom access token: ${zoomDetail}`);
     genericError.statusCode = error.response?.status || 500;
     throw genericError;
   }
