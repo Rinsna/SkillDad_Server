@@ -30,7 +30,28 @@ app.use(express.json({
     }
   }
 }));
-app.use(cors());
+// CORS — allow Vercel frontend + localhost dev
+const allowedOrigins = [
+  'https://skill-dad-client.vercel.app',
+  'https://skilldad.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  process.env.CLIENT_URL,
+].filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, Postman, server-to-server)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+      return callback(null, true);
+    }
+    return callback(new Error(`CORS blocked: ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+}));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
