@@ -18,11 +18,13 @@ const ZOOM_ENCRYPTION_KEY = process.env.ZOOM_ENCRYPTION_KEY;
  * Mock Mode Configuration
  * Enable mock mode for development/testing without real Zoom credentials
  */
-const ZOOM_MOCK_MODE = process.env.ZOOM_MOCK_MODE === 'true';
+// Auto-enable mock mode if real credentials are missing, or if explicitly requested
+const ZOOM_MOCK_MODE = process.env.ZOOM_MOCK_MODE === 'true' ||
+  (!process.env.ZOOM_API_KEY || !process.env.ZOOM_API_SECRET || !process.env.ZOOM_ACCOUNT_ID);
 
 // If mock mode is enabled, use mock implementations
 if (ZOOM_MOCK_MODE) {
-  console.log('[Zoom] ⚠️  MOCK MODE ENABLED - Using mock Zoom implementations for development');
+  console.log('[Zoom] ⚠️  MOCK MODE ENABLED - Auto-falling back to mock Zoom implementations because real credentials are not fully configured');
   const mockZoomUtils = require('./mockZoomUtils');
   module.exports = mockZoomUtils;
   return;
@@ -90,7 +92,7 @@ const queueRateLimitedRequest = (fn, sessionId, operation) => {
   return new Promise((resolve, reject) => {
     console.log(`[Zoom Rate Limit] Queueing request - Session: ${sessionId || 'N/A'}, Operation: ${operation}`);
     rateLimitQueue.push({ resolve, reject, fn, sessionId, operation });
-    
+
     // Start processing queue if not already processing
     if (!isProcessingQueue && rateLimitResetTime && Date.now() >= rateLimitResetTime) {
       processRateLimitQueue();
@@ -118,14 +120,14 @@ const getZoomAccessToken = async (sessionId = null, operation = 'unknown') => {
     }
 
     const tokenUrl = `https://zoom.us/oauth/token?grant_type=account_credentials&account_id=${ZOOM_ACCOUNT_ID}`;
-    
+
     const response = await axios.post(tokenUrl, {}, {
       headers: {
         'Authorization': `Basic ${Buffer.from(`${ZOOM_API_KEY}:${ZOOM_API_SECRET}`).toString('base64')}`,
         'Content-Type': 'application/x-www-form-urlencoded'
       }
     });
-    
+
     return response.data.access_token;
   } catch (error) {
     // If already a credential error, re-throw
@@ -147,13 +149,13 @@ const getZoomAccessToken = async (sessionId = null, operation = 'unknown') => {
     if (error.response?.status === 429) {
       const retryAfter = parseInt(error.response.headers['retry-after'] || '60', 10);
       console.error(`[Zoom Error] Session: ${sessionId || 'N/A'}, Operation: ${operation}, Error: Rate limit exceeded, retry after ${retryAfter}s`);
-      
+
       // Set rate limit reset time
       rateLimitResetTime = Date.now() + (retryAfter * 1000);
-      
+
       // Schedule queue processing after rate limit window
       setTimeout(processRateLimitQueue, retryAfter * 1000);
-      
+
       const rateLimitError = new Error(`Rate limit exceeded. Retry after ${retryAfter} seconds`);
       rateLimitError.statusCode = 429;
       rateLimitError.isRateLimitError = true;
@@ -178,24 +180,24 @@ const encryptPasscode = (passcode) => {
   if (!passcode) {
     throw new Error('Passcode is required for encryption');
   }
-  
+
   if (!ZOOM_ENCRYPTION_KEY) {
     throw new Error('ZOOM_ENCRYPTION_KEY environment variable is not set');
   }
 
   // Ensure the encryption key is 32 bytes for AES-256
   const key = crypto.createHash('sha256').update(ZOOM_ENCRYPTION_KEY).digest();
-  
+
   // Generate a random initialization vector
   const iv = crypto.randomBytes(IV_LENGTH);
-  
+
   // Create cipher
   const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, key, iv);
-  
+
   // Encrypt the passcode
   let encrypted = cipher.update(passcode, 'utf8', 'hex');
   encrypted += cipher.final('hex');
-  
+
   // Return IV and encrypted data separated by colon
   return `${iv.toString('hex')}:${encrypted}`;
 };
@@ -209,7 +211,7 @@ const decryptPasscode = (encryptedPasscode) => {
   if (!encryptedPasscode) {
     throw new Error('Encrypted passcode is required for decryption');
   }
-  
+
   if (!ZOOM_ENCRYPTION_KEY) {
     throw new Error('ZOOM_ENCRYPTION_KEY environment variable is not set');
   }
@@ -220,20 +222,20 @@ const decryptPasscode = (encryptedPasscode) => {
     if (parts.length !== 2) {
       throw new Error('Invalid encrypted passcode format');
     }
-    
+
     const iv = Buffer.from(parts[0], 'hex');
     const encryptedData = parts[1];
-    
+
     // Ensure the encryption key is 32 bytes for AES-256
     const key = crypto.createHash('sha256').update(ZOOM_ENCRYPTION_KEY).digest();
-    
+
     // Create decipher
     const decipher = crypto.createDecipheriv(ENCRYPTION_ALGORITHM, key, iv);
-    
+
     // Decrypt the passcode
     let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
     decrypted += decipher.final('utf8');
-    
+
     return decrypted;
   } catch (error) {
     console.error('Error decrypting passcode:', error.message);
@@ -341,14 +343,14 @@ const createZoomMeeting = async (topic, startTime, duration, hostEmail) => {
 
     } catch (error) {
       lastError = error;
-      
+
       // Log error with full details
       console.error(`[Zoom Error] Session: ${sessionId}, Operation: ${operation}, Attempt: ${attempt}/${maxRetries}, Error: ${error.message}, Status: ${error.statusCode || error.response?.status || 'N/A'}`);
 
       // Handle rate limit errors - queue the request
       if (error.isRateLimitError) {
         console.log(`[Zoom Rate Limit] Session: ${sessionId}, Operation: ${operation}, Queueing request for retry after ${error.retryAfter}s`);
-        
+
         // Queue this request to be retried after rate limit window
         return queueRateLimitedRequest(
           () => createZoomMeeting(topic, startTime, duration, hostEmail),
@@ -521,12 +523,12 @@ const getZoomRecordings = async (meetingId, sessionId = null) => {
       recordingId: file.id,
       downloadUrl: file.download_url || '',
       playUrl: file.play_url || '',
-      recordingType: file.recording_type === 'shared_screen_with_speaker_view' || 
-                     file.recording_type === 'shared_screen_with_gallery_view' ||
-                     file.recording_type === 'speaker_view' ||
-                     file.recording_type === 'gallery_view' ||
-                     file.recording_type === 'audio_only' ? 'cloud' : 'local',
-      durationMs: (file.recording_end && file.recording_start) 
+      recordingType: file.recording_type === 'shared_screen_with_speaker_view' ||
+        file.recording_type === 'shared_screen_with_gallery_view' ||
+        file.recording_type === 'speaker_view' ||
+        file.recording_type === 'gallery_view' ||
+        file.recording_type === 'audio_only' ? 'cloud' : 'local',
+      durationMs: (file.recording_end && file.recording_start)
         ? new Date(file.recording_end) - new Date(file.recording_start)
         : 0,
       fileSizeBytes: file.file_size || 0,
@@ -541,7 +543,7 @@ const getZoomRecordings = async (meetingId, sessionId = null) => {
     // Handle rate limit errors - queue the request
     if (error.isRateLimitError) {
       console.log(`[Zoom Rate Limit] Session: ${sessionId || 'N/A'}, Operation: ${operation}, Queueing request for retry after ${error.retryAfter}s`);
-      
+
       return queueRateLimitedRequest(
         () => getZoomRecordings(meetingId, sessionId),
         sessionId,
@@ -578,7 +580,7 @@ const getZoomRecordings = async (meetingId, sessionId = null) => {
 const syncZoomRecordings = async (sessionId, retryAttempt = 0) => {
   const LiveSession = require('../models/liveSessionModel');
   const operation = 'sync_recordings';
-  
+
   if (!sessionId) {
     console.error(`[Zoom Error] Session: N/A, Operation: ${operation}, Error: Session ID is required`);
     throw new Error('Session ID is required');
@@ -589,7 +591,7 @@ const syncZoomRecordings = async (sessionId, retryAttempt = 0) => {
 
     // Step 1: Fetch session from database
     const session = await LiveSession.findById(sessionId);
-    
+
     if (!session) {
       console.error(`[Zoom Error] Session: ${sessionId}, Operation: ${operation}, Error: Session not found`);
       throw new Error(`Session not found: ${sessionId}`);
@@ -616,11 +618,11 @@ const syncZoomRecordings = async (sessionId, retryAttempt = 0) => {
     if (recordings.length === 0) {
       // No recordings found - implement retry logic
       console.log(`[Zoom] Session: ${sessionId}, Operation: ${operation}, Result: No recordings found`);
-      
+
       // Check if we should retry (24 hours = 288 attempts at 5-minute intervals)
       const maxRetries = 288;
       const retryIntervalMs = 5 * 60 * 1000; // 5 minutes
-      
+
       if (retryAttempt < maxRetries) {
         // Update recording status to 'failed' temporarily
         session.recording = {
@@ -628,9 +630,9 @@ const syncZoomRecordings = async (sessionId, retryAttempt = 0) => {
           createdAt: new Date()
         };
         await session.save();
-        
+
         console.log(`[Zoom] Session: ${sessionId}, Operation: ${operation}, Scheduling retry ${retryAttempt + 1}/${maxRetries} in 5 minutes`);
-        
+
         // Schedule retry using setTimeout
         setTimeout(async () => {
           try {
@@ -639,7 +641,7 @@ const syncZoomRecordings = async (sessionId, retryAttempt = 0) => {
             console.error(`[Zoom Error] Session: ${sessionId}, Operation: ${operation}, Retry ${retryAttempt + 1} failed: ${error.message}`);
           }
         }, retryIntervalMs);
-        
+
         return session;
       } else {
         // Give up after 24 hours
@@ -655,15 +657,15 @@ const syncZoomRecordings = async (sessionId, retryAttempt = 0) => {
 
     // Step 4: Process recordings
     const primaryRecording = recordings[0]; // Use first recording as primary
-    
+
     // Check if recording is still processing
     if (primaryRecording.status === 'processing') {
       console.log(`[Zoom] Session: ${sessionId}, Operation: ${operation}, Result: Recording still processing`);
-      
+
       // Implement retry logic for processing status
       const maxRetries = 288; // 24 hours at 5-minute intervals
       const retryIntervalMs = 5 * 60 * 1000; // 5 minutes
-      
+
       if (retryAttempt < maxRetries) {
         // Update recording status to 'processing'
         session.recording = {
@@ -677,9 +679,9 @@ const syncZoomRecordings = async (sessionId, retryAttempt = 0) => {
           createdAt: primaryRecording.createdAt
         };
         await session.save();
-        
+
         console.log(`[Zoom] Session: ${sessionId}, Operation: ${operation}, Scheduling retry ${retryAttempt + 1}/${maxRetries} in 5 minutes for processing recording`);
-        
+
         // Schedule retry using setTimeout
         setTimeout(async () => {
           try {
@@ -688,7 +690,7 @@ const syncZoomRecordings = async (sessionId, retryAttempt = 0) => {
             console.error(`[Zoom Error] Session: ${sessionId}, Operation: ${operation}, Retry ${retryAttempt + 1} failed: ${error.message}`);
           }
         }, retryIntervalMs);
-        
+
         return session;
       } else {
         // Give up after 24 hours
@@ -720,17 +722,17 @@ const syncZoomRecordings = async (sessionId, retryAttempt = 0) => {
       status: 'completed',
       createdAt: primaryRecording.createdAt
     };
-    
+
     await session.save();
     console.log(`[Zoom] Session: ${sessionId}, Operation: ${operation}, Success: Successfully synced recording`);
-    
+
     return session;
 
   } catch (error) {
     // Handle rate limit errors - queue the request
     if (error.isRateLimitError) {
       console.log(`[Zoom Rate Limit] Session: ${sessionId}, Operation: ${operation}, Queueing request for retry after ${error.retryAfter}s`);
-      
+
       return queueRateLimitedRequest(
         () => syncZoomRecordings(sessionId, retryAttempt),
         sessionId,
