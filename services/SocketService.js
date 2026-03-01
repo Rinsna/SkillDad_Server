@@ -10,7 +10,12 @@ class SocketService {
     init(server) {
         this.io = socketIo(server, {
             cors: {
-                origin: process.env.CLIENT_URL || 'http://localhost:5173',
+                origin: function (origin, callback) {
+                    if (!origin || origin.endsWith('.vercel.app') || origin.startsWith('http://localhost:517')) {
+                        return callback(null, true);
+                    }
+                    return callback(null, process.env.CLIENT_URL === origin);
+                },
                 methods: ['GET', 'POST']
             }
         });
