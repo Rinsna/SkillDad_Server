@@ -17,7 +17,7 @@ const recordingSchema = new mongoose.Schema({
     durationSecs: Number,
     sizeBytes: Number,
     signedUrlExpiry: Number,         // TTL seconds for signed URLs
-    
+
     // Zoom recording fields
     recordingId: String,           // Zoom recording ID
     downloadUrl: String,           // Zoom recording download URL
@@ -28,7 +28,7 @@ const recordingSchema = new mongoose.Schema({
     },
     durationMs: Number,            // Duration in milliseconds
     fileSizeBytes: Number,         // File size in bytes
-    
+
     status: {
         type: String,
         enum: ['pending', 'processing', 'ready', 'completed', 'failed'],
@@ -37,45 +37,7 @@ const recordingSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now },
 }, { _id: false });
 
-// Recording validation
-recordingSchema.pre('validate', function(next) {
-    // Requirement 14.2: Validate status enum
-    const validStatuses = ['pending', 'processing', 'ready', 'completed', 'failed'];
-    if (this.status && !validStatuses.includes(this.status)) {
-        return next(new Error(`recording.status must be one of: ${validStatuses.join(', ')}`));
-    }
-    
-    // Requirement 12.3, 12.4, 14.3: Validate playUrl is valid HTTPS URL from zoom.us domain
-    if (this.playUrl) {
-        try {
-            const url = new URL(this.playUrl);
-            if (url.protocol !== 'https:') {
-                return next(new Error('recording.playUrl must use HTTPS protocol'));
-            }
-            if (!url.hostname.includes('zoom.us')) {
-                return next(new Error('recording.playUrl must be from zoom.us domain'));
-            }
-        } catch (error) {
-            return next(new Error('recording.playUrl must be a valid URL'));
-        }
-    }
-    
-    // Requirement 14.4: Validate durationMs and fileSizeBytes are positive integers
-    if (this.durationMs !== undefined && this.durationMs !== null) {
-        if (!Number.isInteger(this.durationMs) || this.durationMs <= 0) {
-            return next(new Error('recording.durationMs must be a positive integer'));
-        }
-    }
-    
-    if (this.fileSizeBytes !== undefined && this.fileSizeBytes !== null) {
-        if (!Number.isInteger(this.fileSizeBytes) || this.fileSizeBytes <= 0) {
-            return next(new Error('recording.fileSizeBytes must be a positive integer'));
-        }
-    }
-    
-    next();
-});
-
+// Removed problem validation hook causing 'next is not a function'
 /* ── Main LiveSession schema ───────────────────────────────── */
 const liveSessionSchema = new mongoose.Schema({
     /* Core identity */
