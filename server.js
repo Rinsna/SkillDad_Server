@@ -61,6 +61,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/courses', require('./routes/courseRoutes'));
 app.use('/api/courses', require('./routes/interactiveContentRoutes'));
+app.use('/api/submissions', require('./routes/submissionRoutes'));
 app.use('/api/enrollment', require('./routes/enrollmentRoutes'));
 app.use('/api/university', require('./routes/universityRoutes'));
 app.use('/api/partner', require('./routes/partnerRoutes'));
