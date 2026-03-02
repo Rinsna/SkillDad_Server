@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const PartnerLogo = require('../models/partnerLogoModel');
 const Director = require('../models/directorModel');
+const User = require('../models/userModel');
 
 // @desc    Get active partner logos for landing page
 // @route   GET /api/public/partner-logos
@@ -29,6 +30,24 @@ router.get('/directors', async (req, res) => {
     } catch (error) {
         // Log error for debugging database connection issues
         console.error('Error fetching directors:', error.message);
+        res.status(500).json({ message: error.message });
+    }
+});
+
+// @desc    Get all admin-approved universities (for partner student registration)
+// @route   GET /api/public/universities
+// @access  Public
+router.get('/universities', async (req, res) => {
+    try {
+        const universities = await User.find({ 
+            role: 'university',
+            isVerified: true  // Only fetch admin-approved universities
+        })
+            .select('name email profile')
+            .sort({ 'profile.universityName': 1, name: 1 });
+        res.json(universities || []);
+    } catch (error) {
+        console.error('Error fetching universities:', error.message);
         res.status(500).json({ message: error.message });
     }
 });
