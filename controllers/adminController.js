@@ -275,6 +275,8 @@ const getPlatformAnalytics = async (req, res) => {
 
 // @desc    Get Partner Profile & Discount info
 // @route   GET /api/admin/partners/:id
+// @desc    Get partner details with stats
+// @route   GET /api/admin/partners/:id
 // @access  Private (Admin)
 const getPartnerDetails = async (req, res) => {
     try {
@@ -307,6 +309,35 @@ const getPartnerDetails = async (req, res) => {
         } else {
             res.status(404).json({ message: 'Partner not found' });
         }
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// @desc    Get single user by ID
+// @route   GET /api/admin/users/:id
+// @access  Private (Admin)
+const getUserById = async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id).select('-password');
+        if (user) {
+            res.json(user);
+        } else {
+            res.status(404).json({ message: 'User not found' });
+        }
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// @desc    Get partner's discount codes
+// @route   GET /api/admin/partners/:id/discounts
+// @access  Private (Admin)
+const getPartnerDiscounts = async (req, res) => {
+    try {
+        const Discount = require('../models/discountModel');
+        const discounts = await Discount.find({ partner: req.params.id });
+        res.json(discounts);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -853,10 +884,12 @@ module.exports = {
     updateEntity,
     getGlobalStats,
     getAllUsers,
+    getUserById,
     updateUserRole,
     verifyUser,
     getPlatformAnalytics,
     getPartnerDetails,
+    getPartnerDiscounts,
     grantPermission,
     revokePermission,
     getAllStudents,

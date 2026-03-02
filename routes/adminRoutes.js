@@ -3,12 +3,14 @@ const router = express.Router();
 const {
     getGlobalStats,
     getAllUsers,
+    getUserById,
     inviteUser,
     updateUserRole,
     updateEntity,
     verifyUser,
     getPlatformAnalytics,
     getPartnerDetails,
+    getPartnerDiscounts,
     grantPermission,
     revokePermission,
     getAllStudents,
@@ -48,6 +50,7 @@ const checkAdmin = (req, res, next) => {
 router.get('/stats', protect, checkAdmin, getGlobalStats);
 router.get('/analytics', protect, checkAdmin, getPlatformAnalytics);
 router.get('/users', protect, checkAdmin, getAllUsers);
+router.get('/users/:id', protect, checkAdmin, getUserById);
 router.get('/universities', protect, checkAdmin, getUniversities);
 router.get('/universities/:id', protect, checkAdmin, getUniversityDetail);
 router.put('/universities/:id/courses', protect, checkAdmin, assignCoursesToUniversity);
@@ -63,6 +66,7 @@ router.get('/users/all', protect, checkAdmin, async (req, res) => {
 });
 router.put('/entities/:id', protect, checkAdmin, updateEntity);
 router.get('/partners/:id', protect, checkAdmin, getPartnerDetails);
+router.get('/partners/:id/discounts', protect, checkAdmin, getPartnerDiscounts);
 router.post('/users/invite', protect, checkAdmin, inviteUser);
 router.put('/users/:id/role', protect, checkAdmin, updateUserRole);
 router.put('/users/:id/verify', protect, checkAdmin, verifyUser);
