@@ -66,6 +66,10 @@ videoSchema.pre('validate', function () {
 const moduleSchema = mongoose.Schema({
     title: { type: String, required: true },
     videos: [videoSchema],
+    interactiveContent: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'InteractiveContent'
+    }]
 });
 
 const courseSchema = mongoose.Schema({

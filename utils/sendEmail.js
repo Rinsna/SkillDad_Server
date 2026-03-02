@@ -11,7 +11,7 @@ const sendEmail = async (options) => {
         const port = parseInt(process.env.EMAIL_PORT || '587');
         const secure = port === 465; // true for 465, false for 587/other
 
-        // Create a transporter
+        // Create a transporter with Gmail-specific configuration
         const transporter = nodemailer.createTransport({
             host: process.env.EMAIL_HOST,
             port,
@@ -22,8 +22,16 @@ const sendEmail = async (options) => {
             },
             tls: {
                 rejectUnauthorized: false // allow self-signed certs in dev
-            }
+            },
+            // Add connection timeout and retry logic
+            connectionTimeout: 10000, // 10 seconds
+            greetingTimeout: 10000,
+            socketTimeout: 10000,
         });
+
+        // Verify transporter configuration before sending
+        await transporter.verify();
+        console.log('Email transporter verified successfully');
 
         // Define email options
         const mailOptions = {
@@ -37,10 +45,16 @@ const sendEmail = async (options) => {
 
         // Send the email
         const info = await transporter.sendMail(mailOptions);
-        console.log('Email sent: %s', info.messageId);
-        return info;
+        console.log('Email sent successfully: %s', info.messageId);
+        return { success: true, messageId: info.messageId };
     } catch (error) {
         console.error('Error sending email:', error.message);
+        console.error('Email error details:', {
+            code: error.code,
+            command: error.command,
+            response: error.response,
+            responseCode: error.responseCode
+        });
         throw new Error(`Email could not be sent: ${error.message}`);
     }
 };
