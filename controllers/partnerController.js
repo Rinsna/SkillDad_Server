@@ -145,6 +145,8 @@ const registerStudent = async (req, res) => {
             password,
             role: 'student',
             partnerCode: partnerCode?.toUpperCase(),
+            registeredBy: req.user.id, // Track which partner registered this student
+            universityId: req.body.university || null, // Save university if provided
             isVerified: true,
             profile: {
                 phone: phone || ''

@@ -410,6 +410,7 @@ const getAllStudents = async (req, res) => {
 
         const students = await User.find(query)
             .populate('universityId', 'name profile')
+            .populate('registeredBy', 'name email role profile') // Populate partner/university who registered the student
             .select('-password')
             .sort('-createdAt');
 

@@ -43,6 +43,10 @@ const userSchema = mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User', // Links to the University User
     },
+    registeredBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User', // Links to the Partner/University who registered this student
+    },
     partnerCode: {
         type: String, // Code used for B2B referral
     },
