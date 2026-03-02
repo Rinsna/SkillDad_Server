@@ -31,21 +31,22 @@ const isUniversityOrAdmin = (user) =>
 const canViewSession = (user, session) => {
     if (user.role === 'admin') return true;
 
+    // Helper to extract ID from either ObjectId or populated object
+    const extractId = (field) => {
+        if (!field) return null;
+        if (typeof field === 'string') return field;
+        if (field._id) return field._id.toString();
+        return field.toString();
+    };
+
     // University can view their own sessions
     if (user.role === 'university') {
-        const universityMatch = session.university?.toString() === user._id.toString();
-        const instructorMatch = session.instructor?.toString() === user._id.toString();
+        const sessionUniversityId = extractId(session.university);
+        const sessionInstructorId = extractId(session.instructor);
+        const userId = user._id.toString();
         
-        console.log('[canViewSession] University check:', {
-            userId: user._id.toString(),
-            userEmail: user.email,
-            sessionId: session._id?.toString(),
-            sessionUniversity: session.university?.toString(),
-            sessionInstructor: session.instructor?.toString(),
-            universityMatch,
-            instructorMatch,
-            result: universityMatch || instructorMatch
-        });
+        const universityMatch = sessionUniversityId === userId;
+        const instructorMatch = sessionInstructorId === userId;
         
         return universityMatch || instructorMatch;
     }
@@ -53,13 +54,14 @@ const canViewSession = (user, session) => {
     // Students can view if enrolled or if it's their university's session
     if (user.role === 'student') {
         const isEnrolled = session.enrolledStudents?.some(
-            (sid) => sid.toString() === user._id.toString()
+            (sid) => extractId(sid) === user._id.toString()
         );
         if (isEnrolled) return true;
 
         // Also allow if it's their university's session
         const studentUniId = user.universityId || user.university;
-        if (studentUniId && session.university?.toString() === studentUniId.toString()) {
+        const sessionUniversityId = extractId(session.university);
+        if (studentUniId && sessionUniversityId === extractId(studentUniId)) {
             return true;
         }
     }
