@@ -30,8 +30,14 @@ const isUniversityOrAdmin = (user) =>
 
 const canViewSession = (user, session) => {
     if (user.role === 'admin') return true;
-    if (user.role === 'university')
-        return session.university?.toString() === user._id.toString();
+    
+    // University can view their own sessions
+    if (user.role === 'university') {
+        return session.university?.toString() === user._id.toString() ||
+               session.instructor?.toString() === user._id.toString();
+    }
+    
+    // Students can view if enrolled or if it's their university's session
     if (user.role === 'student') {
         const isEnrolled = session.enrolledStudents?.some(
             (sid) => sid.toString() === user._id.toString()
@@ -44,6 +50,7 @@ const canViewSession = (user, session) => {
             return true;
         }
     }
+    
     return false;
 };
 
