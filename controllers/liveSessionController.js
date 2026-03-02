@@ -30,13 +30,26 @@ const isUniversityOrAdmin = (user) =>
 
 const canViewSession = (user, session) => {
     if (user.role === 'admin') return true;
-    
+
     // University can view their own sessions
     if (user.role === 'university') {
-        return session.university?.toString() === user._id.toString() ||
-               session.instructor?.toString() === user._id.toString();
+        const universityMatch = session.university?.toString() === user._id.toString();
+        const instructorMatch = session.instructor?.toString() === user._id.toString();
+        
+        console.log('[canViewSession] University check:', {
+            userId: user._id.toString(),
+            userEmail: user.email,
+            sessionId: session._id?.toString(),
+            sessionUniversity: session.university?.toString(),
+            sessionInstructor: session.instructor?.toString(),
+            universityMatch,
+            instructorMatch,
+            result: universityMatch || instructorMatch
+        });
+        
+        return universityMatch || instructorMatch;
     }
-    
+
     // Students can view if enrolled or if it's their university's session
     if (user.role === 'student') {
         const isEnrolled = session.enrolledStudents?.some(
@@ -50,7 +63,7 @@ const canViewSession = (user, session) => {
             return true;
         }
     }
-    
+
     return false;
 };
 
@@ -59,8 +72,8 @@ const isLegacyBunnySession = (session) => {
     // A session is considered legacy if:
     // 1. It has the 'legacy-bunny' tag, OR
     // 2. It has bunny data but no zoom data
-    return session.tags?.includes('legacy-bunny') || 
-           (session.bunny?.videoId && !session.zoom?.meetingId);
+    return session.tags?.includes('legacy-bunny') ||
+        (session.bunny?.videoId && !session.zoom?.meetingId);
 };
 
 const addLegacyFlag = (session) => {
@@ -130,7 +143,7 @@ const createSession = asyncHandler(async (req, res) => {
         // Get instructor email for Zoom meeting creation
         const instructorId = instructor || req.user._id;
         const instructorUser = await User.findById(instructorId).select('email').lean();
-        
+
         if (!instructorUser || !instructorUser.email) {
             res.status(400);
             throw new Error('Instructor email is required for Zoom meeting creation');
@@ -290,14 +303,14 @@ const getSessions = asyncHandler(async (req, res) => {
             .populate('instructor', 'name email profileImage profile')
             .populate('course', 'title')
             .lean();
-        
+
         // Students cannot view metrics (Requirement 12.5)
         sessions.forEach(session => {
             delete session.metrics;
             // Add legacy flag for backward compatibility
             addLegacyFlag(session);
         });
-        
+
         return res.json(sessions);
     }
 
@@ -333,7 +346,7 @@ const getSessions = asyncHandler(async (req, res) => {
     // Metrics are included for university and admin users (Requirement 12.5)
     // Add legacy flags for backward compatibility
     sessions.forEach(session => addLegacyFlag(session));
-    
+
     await cacheUniSessions(cacheKey, sessions);
     res.json(sessions);
 });
@@ -348,18 +361,18 @@ const getSession = asyncHandler(async (req, res) => {
         if (!canViewSession(req.user, fullCache))
             return res.status(403).json({ message: 'Access denied' });
         if (statusCache) fullCache.status = statusCache.status;
-        
+
         // Authorization check for metrics access (Requirement 12.5)
-        const canViewMetrics = req.user.role === 'admin' || 
-                               req.user.role === 'university' ||
-                               fullCache.instructor?.toString() === req.user._id.toString();
+        const canViewMetrics = req.user.role === 'admin' ||
+            req.user.role === 'university' ||
+            fullCache.instructor?.toString() === req.user._id.toString();
         if (!canViewMetrics) {
             delete fullCache.metrics;
         }
-        
+
         // Add legacy flag for backward compatibility
         addLegacyFlag(fullCache);
-        
+
         return res.json(fullCache);
     }
 
@@ -374,18 +387,18 @@ const getSession = asyncHandler(async (req, res) => {
 
     await cacheSession(session);
     await cacheSessionStatus(session._id.toString(), session.status);
-    
+
     // Authorization check for metrics access (Requirement 12.5)
-    const canViewMetrics = req.user.role === 'admin' || 
-                           req.user.role === 'university' ||
-                           session.instructor?.toString() === req.user._id.toString();
+    const canViewMetrics = req.user.role === 'admin' ||
+        req.user.role === 'university' ||
+        session.instructor?.toString() === req.user._id.toString();
     if (!canViewMetrics) {
         delete session.metrics;
     }
-    
+
     // Add legacy flag for backward compatibility
     addLegacyFlag(session);
-    
+
     res.json(session);
 });
 
@@ -682,9 +695,9 @@ const getRecordingStatus = asyncHandler(async (req, res) => {
     }
 
     // Backward compatibility: Check if this is a legacy Bunny session
-    const isLegacySession = session.tags?.includes('legacy-bunny') || 
-                           (session.bunny?.videoId && !session.zoom?.meetingId);
-    
+    const isLegacySession = session.tags?.includes('legacy-bunny') ||
+        (session.bunny?.videoId && !session.zoom?.meetingId);
+
     if (isLegacySession) {
         // Return Bunny recording data if available
         if (session.recording?.bunnyVideoId) {
@@ -694,8 +707,8 @@ const getRecordingStatus = asyncHandler(async (req, res) => {
                 message: 'This is a legacy Bunny.net recording'
             });
         }
-        return res.json({ 
-            status: 'pending', 
+        return res.json({
+            status: 'pending',
             isLegacy: true,
             message: 'Legacy Bunny.net session - recording may be available in the old system'
         });
@@ -706,11 +719,11 @@ const getRecordingStatus = asyncHandler(async (req, res) => {
         try {
             // Trigger sync for processing recordings
             await syncZoomRecordings(req.params.id);
-            
+
             // Fetch updated session data
             const updatedSession = await LiveSession.findById(req.params.id)
                 .select('recording').lean();
-            
+
             return res.json(updatedSession.recording || { status: 'pending' });
         } catch (error) {
             console.error('Error syncing Zoom recordings:', error.message);
@@ -728,7 +741,7 @@ const getRecordingStatus = asyncHandler(async (req, res) => {
 const getRecordingPlaybackUrl = asyncHandler(async (req, res) => {
     const session = await LiveSession.findById(req.params.id)
         .select('recording zoom bunny status university instructor enrolledStudents tags').lean();
-    
+
     if (!session) {
         res.status(404);
         throw new Error('Session not found');
@@ -753,9 +766,9 @@ const getRecordingPlaybackUrl = asyncHandler(async (req, res) => {
     }
 
     // Backward compatibility: Check if this is a legacy Bunny session
-    const isLegacySession = session.tags?.includes('legacy-bunny') || 
-                           (session.bunny?.videoId && !session.zoom?.meetingId);
-    
+    const isLegacySession = session.tags?.includes('legacy-bunny') ||
+        (session.bunny?.videoId && !session.zoom?.meetingId);
+
     if (isLegacySession) {
         // Return Bunny recording data if available
         if (session.recording?.storagePath || session.bunny?.hlsPlaybackUrl) {
@@ -770,7 +783,7 @@ const getRecordingPlaybackUrl = asyncHandler(async (req, res) => {
                 message: 'This is a legacy Bunny.net recording'
             });
         }
-        
+
         res.status(404);
         throw new Error('Legacy Bunny.net recording not available. Please check the old system.');
     }
@@ -873,20 +886,20 @@ const trackSessionJoin = asyncHandler(async (req, res) => {
     // Track join time in Redis for watch time calculation
     const joinKey = `session:${req.params.id}:user:${req.user._id}:join`;
     const activeViewersKey = `session:${req.params.id}:active`;
-    
+
     try {
         const r = redisCache.getRedis();
         if (r) {
             // Store join timestamp
             await r.set(joinKey, Date.now().toString(), { EX: 24 * 60 * 60 }); // 24 hour expiry
-            
+
             // Add user to active viewers set
             await r.sAdd(activeViewersKey, req.user._id.toString());
             await r.expire(activeViewersKey, 24 * 60 * 60); // 24 hour expiry
-            
+
             // Get current active viewer count
             const activeCount = await r.sCard(activeViewersKey);
-            
+
             // Update peak viewers if current count is higher (Requirement 12.2)
             if (activeCount > (session.metrics.peakViewers || 0)) {
                 session.metrics.peakViewers = activeCount;
@@ -899,7 +912,7 @@ const trackSessionJoin = asyncHandler(async (req, res) => {
     await session.save();
     await invalidateSession(session._id.toString(), session.university.toString());
 
-    res.json({ 
+    res.json({
         message: 'Join tracked successfully',
         totalJoins: session.metrics.totalJoins,
         peakViewers: session.metrics.peakViewers
@@ -921,26 +934,26 @@ const trackSessionLeave = asyncHandler(async (req, res) => {
     const joinKey = `session:${req.params.id}:user:${req.user._id}:join`;
     const activeViewersKey = `session:${req.params.id}:active`;
     const watchTimesKey = `session:${req.params.id}:watchtimes`;
-    
+
     try {
         const r = redisCache.getRedis();
         if (r) {
             // Get join timestamp
             const joinTimeStr = await r.get(joinKey);
-            
+
             if (joinTimeStr) {
                 const joinTime = parseInt(joinTimeStr, 10);
                 const leaveTime = Date.now();
                 const watchTimeSecs = Math.floor((leaveTime - joinTime) / 1000);
-                
+
                 // Store watch time for this user
                 await r.hSet(watchTimesKey, req.user._id.toString(), watchTimeSecs.toString());
                 await r.expire(watchTimesKey, 24 * 60 * 60); // 24 hour expiry
-                
+
                 // Remove join timestamp
                 await r.del(joinKey);
             }
-            
+
             // Remove user from active viewers set
             await r.sRem(activeViewersKey, req.user._id.toString());
         }
@@ -959,7 +972,7 @@ const finalizeSessionMetrics = async (sessionId) => {
     const watchTimesKey = `session:${sessionId}:watchtimes`;
     const activeViewersKey = `session:${sessionId}:active`;
     const joinKeyPattern = `session:${sessionId}:user:*:join`;
-    
+
     try {
         const r = redisCache.getRedis();
         if (!r) {
@@ -969,31 +982,31 @@ const finalizeSessionMetrics = async (sessionId) => {
 
         // Get all watch times
         const watchTimes = await r.hGetAll(watchTimesKey);
-        
+
         // Handle users still in session (calculate their watch time)
         const activeUsers = await r.sMembers(activeViewersKey);
         const endTime = Date.now();
-        
+
         for (const userId of activeUsers) {
             const joinKey = `session:${sessionId}:user:${userId}:join`;
             const joinTimeStr = await r.get(joinKey);
-            
+
             if (joinTimeStr) {
                 const joinTime = parseInt(joinTimeStr, 10);
                 const watchTimeSecs = Math.floor((endTime - joinTime) / 1000);
                 watchTimes[userId] = watchTimeSecs.toString();
             }
         }
-        
+
         // Calculate average watch time (Requirement 12.3)
         const watchTimeValues = Object.values(watchTimes).map(t => parseInt(t, 10));
         let avgWatchSecs = 0;
-        
+
         if (watchTimeValues.length > 0) {
             const totalWatchTime = watchTimeValues.reduce((sum, time) => sum + time, 0);
             avgWatchSecs = Math.floor(totalWatchTime / watchTimeValues.length);
         }
-        
+
         // Update session with finalized metrics
         const session = await LiveSession.findById(sessionId);
         if (session) {
@@ -1001,17 +1014,17 @@ const finalizeSessionMetrics = async (sessionId) => {
             await session.save();
             console.log(`[Metrics] Session ${sessionId} finalized: totalJoins=${session.metrics.totalJoins}, peakViewers=${session.metrics.peakViewers}, avgWatchSecs=${avgWatchSecs}`);
         }
-        
+
         // Clean up Redis keys
         await r.del(watchTimesKey);
         await r.del(activeViewersKey);
-        
+
         // Clean up individual join keys
         const keys = await r.keys(joinKeyPattern);
         if (keys.length > 0) {
             await r.del(keys);
         }
-        
+
     } catch (error) {
         console.error('Error finalizing session metrics:', error.message);
     }
@@ -1026,16 +1039,16 @@ const getZoomSDKConfig = asyncHandler(async (req, res) => {
     const session = await LiveSession.findOne({ _id: req.params.id, isDeleted: false })
         .select('topic zoom bunny university instructor enrolledStudents tags')
         .lean();
-    
+
     if (!session) {
         res.status(404);
         throw new Error('Session not found');
     }
 
     // Backward compatibility: Check if this is a legacy Bunny session
-    const isLegacySession = session.tags?.includes('legacy-bunny') || 
-                           (session.bunny?.videoId && !session.zoom?.meetingId);
-    
+    const isLegacySession = session.tags?.includes('legacy-bunny') ||
+        (session.bunny?.videoId && !session.zoom?.meetingId);
+
     if (isLegacySession) {
         res.status(400);
         throw new Error('This is a legacy session using Bunny.net streaming. Zoom SDK is not available for this session. Please use the legacy player.');

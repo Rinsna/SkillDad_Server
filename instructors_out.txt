@@ -1,0 +1,15 @@
+﻿[dotenv@17.3.1] injecting env (40) from server\.env -- tip: ΓÜÖ∩╕Å  specify custom .env file path with { path: '/custom/path/.env' }
+Checking 7 courses...
+- Course: Full-Stack Next.js Mastery, Instructor: Admin User (69a12ab59b6ce070ae944653), Role: admin
+- Course: Introduction to Advanced Research, Instructor: undefined (undefined), Role: undefined
+- Course: Advanced Clinical trials & Methodology, Instructor: undefined (undefined), Role: undefined
+- Course: Biostatistics for Medical Researchers, Instructor: undefined (undefined), Role: undefined
+- Course: Genetics and Molecular Biology, Instructor: undefined (undefined), Role: undefined
+- Course: Healthcare Ethics and Policy, Instructor: undefined (undefined), Role: undefined
+- Course: react, Instructor: Dr. Sarah Wilson (69a12ab59b6ce070ae944654), Role: university
+Total universities in DB: 5
+- Uni: Dr. Sarah Wilson (69a12ab59b6ce070ae944654)
+- Uni: CIT University (69a13f92ec3aff62fcfe9c4e)
+- Uni: Test University X (69a144e9df0cfd162a323283)
+- Uni: Deploy Test (69a147445472e0763143c646)
+- Uni: SkillDad University (69a29d6cc78f7a920b0693a7)

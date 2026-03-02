@@ -1,0 +1,8 @@
+﻿[dotenv@17.3.1] injecting env (40) from .env -- tip: ΓÜí∩╕Å secrets for agents: https://dotenvx.com/as2
+---COURSES FOR Dr. Sara Wilson---
+- Introduction to Advanced Research (Published)
+- Advanced Clinical trials & Methodology (Published)
+- Biostatistics for Medical Researchers (Published)
+- Genetics and Molecular Biology (Published)
+- Healthcare Ethics and Policy (Published)
+---END---

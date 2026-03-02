@@ -1,0 +1,14 @@
+[
+  {
+    "_id": "69a12ab59b6ce070ae944654",
+    "name": "Dr. Sarah Wilson",
+    "email": "sarah.wilson@university.edu",
+    "createdAt": "2026-02-27T05:25:09.900Z"
+  },
+  {
+    "_id": "69a29e16df8dbb06c56d0fca",
+    "name": "Dr. Sara Wilson",
+    "email": "sara.wilson@university.com",
+    "createdAt": "2026-02-28T07:49:42.566Z"
+  }
+]
