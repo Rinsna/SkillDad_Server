@@ -553,7 +553,11 @@ const handleCallback = async (req, res) => {
     // Find transaction without mongoose session locking due to non-replica set environment locally
     transaction = await Transaction.findOne({ transactionId })
       .populate('student', 'name email')
-      .populate('course', 'title');
+      .populate({
+        path: 'course',
+        select: 'title instructor',
+        populate: { path: 'instructor', select: 'name role' }
+      });
 
     if (!transaction) {
       return res.status(404).send('<h1>Transaction not found</h1>');
@@ -697,6 +701,19 @@ const handleCallback = async (req, res) => {
       } else {
         enrollment.status = 'active';
         await enrollment.save();
+      }
+
+      // Link student to university if course is university-hosted
+      try {
+        const student = await User.findById(transaction.student._id);
+        const instructor = await User.findById(transaction.course.instructor);
+        if (student && instructor && instructor.role === 'university') {
+          student.universityId = instructor._id;
+          await student.save();
+          console.log(`[Payment] Linked student ${student.email} to university ${instructor.name}`);
+        }
+      } catch (linkError) {
+        console.error('Error linking student to university:', linkError);
       }
 
       // Generate receipt (Requirement 9.1)
@@ -1007,6 +1024,22 @@ const handleWebhook = async (req, res) => {
       } else if (enrollment.status !== 'active') {
         enrollment.status = 'active';
         await enrollment.save({ session });
+      }
+
+      // Link student to university if course is university-hosted
+      try {
+        const student = await User.findById(transaction.student);
+        const course = await Course.findById(transaction.course);
+        if (student && course && course.instructor) {
+          const instructor = await User.findById(course.instructor);
+          if (instructor && instructor.role === 'university') {
+            student.universityId = instructor._id;
+            await student.save({ session });
+            console.log(`[Webhook] Linked student ${student.email} to university ${instructor.name}`);
+          }
+        }
+      } catch (linkError) {
+        console.error('Error linking student to university in webhook:', linkError);
       }
 
       // Generate receipt if not already generated

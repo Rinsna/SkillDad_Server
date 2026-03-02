@@ -35,6 +35,9 @@ const allowedOrigins = [
   'https://skill-dad-client.vercel.app',
   'https://skilldad.vercel.app',
   'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:5174',
+  'http://127.0.0.1:5174',
   'http://localhost:3000',
   process.env.CLIENT_URL,
 ].filter(Boolean);
@@ -86,7 +89,37 @@ app.get('/', (req, res) => {
 
 // Health check endpoint (used by keep-alive ping and uptime monitors)
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.status(200).json({ status: 'ok-v2', timestamp: new Date().toISOString() });
+});
+
+// Debug routes endpoint (DANGEROUS - ONLY FOR FIXING 404s)
+app.get('/debug-routes', (req, res) => {
+  const routes = [];
+  app._router.stack.forEach(middleware => {
+    if (middleware.route) { // routes registered directly on the app
+      routes.push(`${Object.keys(middleware.route.methods).join(',').toUpperCase()} ${middleware.route.path}`);
+    } else if (middleware.name === 'router') { // router middleware
+      middleware.handle.stack.forEach(handler => {
+        if (handler.route) {
+          const path = handler.route.path;
+          const methods = Object.keys(handler.route.methods).join(',').toUpperCase();
+          routes.push(`${methods} ${middleware.regexp.toString().replace('/^\\', '').replace('\\/?(?=\\/|$)/i', '')}${path}`);
+        }
+      });
+    }
+  });
+  const fs = require('fs');
+  const path = require('path');
+  const files = fs.readdirSync(__dirname);
+  const routesDir = fs.existsSync(path.join(__dirname, 'routes')) ? fs.readdirSync(path.join(__dirname, 'routes')) : 'MISSING';
+
+  res.json({
+    cwd: process.cwd(),
+    dirname: __dirname,
+    rootFiles: files,
+    routesFiles: routesDir,
+    routes
+  });
 });
 
 app.use(errorHandler);

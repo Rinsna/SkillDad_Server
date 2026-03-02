@@ -2,6 +2,7 @@ const User = require('../models/userModel');
 const Group = require('../models/groupModel');
 const Discount = require('../models/discountModel');
 const LiveSession = require('../models/liveSessionModel');
+const Course = require('../models/courseModel');
 
 // @desc    Get University Dashboard Stats
 // @route   GET /api/university/stats
@@ -196,6 +197,40 @@ const deleteDiscount = async (req, res) => {
     }
 };
 
+// @desc    Register a new student by University
+// @route   POST /api/university/register-student
+// @access  Private (University)
+const registerStudentByUniversity = async (req, res) => {
+    return res.status(403).json({
+        message: 'Manual student registration is disabled. Students will be automatically added to your list when they enroll in your courses.'
+    });
+};
+
+// @desc    Get all courses assigned to or provided by the university
+// @route   GET /api/university/courses
+// @access  Private (University)
+const getUniversityCourses = async (req, res) => {
+    try {
+        const universityId = req.user._id;
+
+        // Fetch courses where this university is the instructor (Provider University)
+        const providedCourses = await Course.find({ instructor: universityId });
+
+        // Fetch manually assigned courses from the university user document
+        const universityUser = await User.findById(universityId).populate('assignedCourses');
+        const assignedCourses = universityUser?.assignedCourses || [];
+
+        // Combine and de-duplicate by ID
+        const combined = [...providedCourses, ...assignedCourses];
+        const uniqueMap = new Map();
+        combined.forEach(c => uniqueMap.set(c._id.toString(), c));
+
+        res.json(Array.from(uniqueMap.values()));
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 module.exports = {
     getDashboardStats,
     createGroup,
@@ -203,5 +238,7 @@ module.exports = {
     addStudentToGroup,
     createDiscount,
     getDiscounts,
-    deleteDiscount
+    deleteDiscount,
+    registerStudentByUniversity,
+    getUniversityCourses
 };

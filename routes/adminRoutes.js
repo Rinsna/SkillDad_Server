@@ -24,16 +24,24 @@ const {
     createDirector,
     updateDirector,
     deleteDirector,
-    getUniversities
+    getUniversities,
+    assignCoursesToUniversity,
+    getUniversityDetail
 } = require('../controllers/adminController');
 const { protect } = require('../middleware/authMiddleware');
 
-// Middleware to check if user is admin
 const checkAdmin = (req, res, next) => {
+    const fs = require('fs');
+    const path = require('path');
+    const log = `[${new Date().toISOString()}] ADMIN CHECK - User: ${req.user ? req.user.email : 'UNDEFINED'}, Role: ${req.user ? req.user.role : 'N/A'}, URL: ${req.originalUrl}\n`;
+    fs.appendFileSync(path.join(__dirname, '../debug_admin.log'), log);
+
     if (req.user && req.user.role?.toLowerCase() === 'admin') {
         next();
     } else {
-        return res.status(403).json({ message: 'Not authorized as an Admin' });
+        const denyLog = `[${new Date().toISOString()}] ADMIN DENIED - User ${req.user ? req.user.email : 'Unknown'} with role ${req.user ? req.user.role : 'None'} attempted to access ${req.originalUrl}\n`;
+        fs.appendFileSync(path.join(__dirname, '../debug_admin.log'), denyLog);
+        return res.status(403).json({ message: 'Not authorized as an Admin [checkAdmin]' });
     }
 };
 
@@ -41,6 +49,8 @@ router.get('/stats', protect, checkAdmin, getGlobalStats);
 router.get('/analytics', protect, checkAdmin, getPlatformAnalytics);
 router.get('/users', protect, checkAdmin, getAllUsers);
 router.get('/universities', protect, checkAdmin, getUniversities);
+router.get('/universities/:id', protect, checkAdmin, getUniversityDetail);
+router.put('/universities/:id/courses', protect, checkAdmin, assignCoursesToUniversity);
 // All users without pagination — used by B2B management
 router.get('/users/all', protect, checkAdmin, async (req, res) => {
     try {

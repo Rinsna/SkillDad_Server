@@ -37,14 +37,32 @@ const registerUser = async (req, res) => {
 
         // Public registration ONLY creates student accounts
         // Universities and B2B partners are created by admin only
-        console.log('Creating student user...');
+        let userRole = 'student';
+        let discountRate = 0;
+
+        // Check if admin is creating the user
+        if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+            try {
+                const token = req.headers.authorization.split(' ')[1];
+                const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                const creator = await User.findById(decoded.id).select('role');
+                if (creator && creator.role === 'admin') {
+                    userRole = req.body.role || 'student';
+                    discountRate = req.body.discountRate || 0;
+                }
+            } catch (e) {
+                console.error("Token admin check failed:", e.message);
+            }
+        }
+
+        console.log(`Creating user with role: ${userRole}...`);
         const user = await User.create({
             name,
             email,
             password,
-            role: 'student',
+            role: userRole,
             isVerified: true,
-            discountRate: 0,
+            discountRate: discountRate,
             profile: {
                 phone: phone.trim()
             }
@@ -264,7 +282,25 @@ const getUsers = async (req, res) => {
         if (universityId) query.universityId = universityId;
 
         const users = await User.find(query).select('-password');
-        res.json(users);
+
+        // Populate additional enrollment info for students
+        const usersWithData = await Promise.all(users.map(async (user) => {
+            if (user.role === 'student') {
+                const Enrollment = require('../models/enrollmentModel');
+                const enrollments = await Enrollment.find({ student: user._id })
+                    .populate('course', 'title')
+                    .sort('-createdAt');
+
+                return {
+                    ...user.toObject(),
+                    enrollmentCount: enrollments.length,
+                    course: enrollments.length > 0 ? enrollments[0].course?.title : 'Enrolled Student'
+                };
+            }
+            return user;
+        }));
+
+        res.json(usersWithData);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }

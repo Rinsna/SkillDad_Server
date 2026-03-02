@@ -1,7 +1,17 @@
 const express = require('express');
 const router = express.Router();
-const { getDashboardStats, createGroup, getGroups, addStudentToGroup, createDiscount, getDiscounts, deleteDiscount } = require('../controllers/universityController');
-const { protect, authorize } = require('../middleware/authMiddleware'); // Need to implement authorize if not present, or checking role in controller
+const {
+    getDashboardStats,
+    createGroup,
+    getGroups,
+    addStudentToGroup,
+    createDiscount,
+    getDiscounts,
+    deleteDiscount,
+    registerStudentByUniversity,
+    getUniversityCourses
+} = require('../controllers/universityController');
+const { protect } = require('../middleware/authMiddleware');
 
 // Middleware to check if user is university
 const checkUniversity = (req, res, next) => {
@@ -14,6 +24,9 @@ const checkUniversity = (req, res, next) => {
 };
 
 router.get('/stats', protect, checkUniversity, getDashboardStats);
+router.post('/register-student', protect, checkUniversity, registerStudentByUniversity);
+router.get('/courses', protect, checkUniversity, getUniversityCourses);
+
 router.route('/groups')
     .post(protect, checkUniversity, createGroup)
     .get(protect, checkUniversity, getGroups);

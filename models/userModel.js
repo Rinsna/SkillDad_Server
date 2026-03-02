@@ -46,6 +46,10 @@ const userSchema = mongoose.Schema({
     partnerCode: {
         type: String, // Code used for B2B referral
     },
+    assignedCourses: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Course',
+    }],
     isVerified: {
         type: Boolean,
         default: false,
