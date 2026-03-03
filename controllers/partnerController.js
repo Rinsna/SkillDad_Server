@@ -118,7 +118,7 @@ const getPayoutHistory = async (req, res) => {
 // @route   POST /api/partner/register-student
 // @access  Private (Partner)
 const registerStudent = async (req, res) => {
-    const { name, email, password, phone, partnerCode } = req.body;
+    const { name, email, password, phone, partnerCode, course, courseFee, university } = req.body;
 
     try {
         if (!name || !email || !password) {
@@ -146,18 +146,29 @@ const registerStudent = async (req, res) => {
             role: 'student',
             partnerCode: partnerCode?.toUpperCase(),
             registeredBy: req.user.id, // Track which partner registered this student
-            universityId: req.body.university || null, // Save university if provided
+            universityId: university || null, // Save university if provided
             isVerified: true,
             profile: {
-                phone: phone || ''
+                phone: phone || '',
+                registeredCourse: course || null, // Save course ID
+                registeredCourseFee: courseFee || null // Save course fee
             }
         });
+
+        // If course is provided, add it to assignedCourses array
+        if (course) {
+            student.assignedCourses.push(course);
+            await student.save();
+        }
 
         res.status(201).json({
             _id: student._id,
             name: student.name,
             email: student.email,
             partnerCode: student.partnerCode,
+            course: course,
+            courseFee: courseFee,
+            university: university,
             message: 'Student registered successfully'
         });
     } catch (error) {
