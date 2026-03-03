@@ -71,17 +71,19 @@ router.get('/csrf-token', csrfProtection, generateCsrfToken);
 
 /**
  * @route   GET /api/payment/callback
- * @desc    Handle payment gateway callback (redirect after payment)
+ * @desc    Handle Razorpay payment callback (redirect after payment)
  * @access  Public (signature verified in controller)
- * @note    No JWT auth required - signature verification is done in the controller
+ * @note    No JWT auth required - Razorpay signature verification is done in the controller
+ * @params  razorpay_payment_id, razorpay_order_id, razorpay_signature (query params)
  */
 router.get('/callback', handleCallback);
 
 /**
  * @route   POST /api/payment/webhook
- * @desc    Handle payment gateway webhook notifications
+ * @desc    Handle Razorpay webhook notifications
  * @access  Public (signature verified in controller)
- * @note    No JWT auth required - signature verification is done in the controller
+ * @note    No JWT auth required - Razorpay webhook signature verification is done in the controller
+ * @events  payment.captured, payment.failed
  */
 router.post('/webhook', handleWebhook);
 

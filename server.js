@@ -87,7 +87,6 @@ app.use('/api/admin/payment', require('./routes/adminPaymentRoutes'));
 app.use('/api/admin/reconciliation', require('./routes/reconciliationRoutes'));
 app.use('/api/admin/monitoring', require('./routes/monitoringRoutes'));
 
-
 app.get('/', (req, res) => {
   res.send('API is running...');
 });

@@ -7,6 +7,7 @@ const PartnerLogo = require('../models/partnerLogoModel');
 const Director = require('../models/directorModel');
 const Enrollment = require('../models/enrollmentModel');
 const Document = require('../models/documentModel');
+const socketService = require('../services/SocketService');
 
 // @desc    Update entity (partner/university) details + discount rate
 // @route   PUT /api/admin/entities/:id
@@ -722,38 +723,97 @@ async function deleteDirector(req, res) {
 // @access  Private (Admin)
 async function inviteUser(req, res) {
     try {
+        console.log('[inviteUser] Received request body:', req.body);
         const { name, email, password, role, universityId } = req.body;
+        const normalizedEmail = email ? email.toLowerCase().trim() : '';
+        const normalizedName = name ? name.trim() : '';
 
-        if (!name || !email || !password || !role) {
-            return res.status(400).json({ message: 'Please provide all required fields' });
+        console.log('[inviteUser] Validation check:', { 
+            name: !!normalizedName, 
+            email: !!normalizedEmail, 
+            password: !!password, 
+            role: !!role,
+            nameValue: normalizedName,
+            emailValue: normalizedEmail,
+            passwordLength: password?.length,
+            roleValue: role
+        });
+
+        if (!normalizedName || !normalizedEmail || !password || !role) {
+            console.log('[inviteUser] Validation failed - missing required fields');
+            return res.status(400).json({
+                message: 'Please provide all required fields',
+                debug: { name: !!normalizedName, email: !!normalizedEmail, password: !!password, role: !!role }
+            });
         }
 
         // Check if user already exists
-        const userExists = await User.findOne({ email });
+        const userExists = await User.findOne({ email: normalizedEmail });
         if (userExists) {
-            return res.status(400).json({ message: 'A user with this email already exists' });
+            console.log('[inviteUser] User already exists:', normalizedEmail);
+            return res.status(400).json({ message: `A user with email ${normalizedEmail} already exists` });
         }
 
         // Create the user
+        console.log('[inviteUser] Creating user with data:', { 
+            name: normalizedName, 
+            email: normalizedEmail, 
+            role, 
+            universityId: universityId || undefined 
+        });
         const user = await User.create({
-            name,
-            email,
+            name: normalizedName,
+            email: normalizedEmail,
             password,
             role,
             universityId: universityId || undefined,
             isVerified: true
         });
 
+        console.log('[inviteUser] User created successfully:', user._id);
+
+        // Notify all admins via WebSocket that a new user was created
+        socketService.notifyUserListUpdate('created', user);
+
         // Send invitation email
         try {
+            // Customize subject based on role
+            let emailSubject = 'Welcome to SkillDad - Your Account Has Been Created';
+            if (role === 'partner' || role === 'b2b') {
+                emailSubject = 'Welcome to SkillDad - B2B Partner Account Created';
+            } else if (role === 'university') {
+                emailSubject = 'Welcome to SkillDad - University Partner Account Created';
+            } else if (role === 'instructor') {
+                emailSubject = 'Welcome to SkillDad - Instructor Account Created';
+            }
+            
+            console.log('[inviteUser] Attempting to send email to:', user.email);
+            console.log('[inviteUser] Email subject:', emailSubject);
+            console.log('[inviteUser] CLIENT_URL:', process.env.CLIENT_URL);
+            
             await sendEmail({
                 email: user.email,
-                subject: 'Security Protocol: Shared Neural Sync - SkillDad',
-                message: `Hello ${user.name},\n\nYou have been invited to SkillDad as a ${user.role}.`,
+                subject: emailSubject,
+                message: `Hello ${user.name},\n\nWelcome to SkillDad! You have been invited to join our platform as a ${user.role}.\n\nYour login credentials:\nUsername (Email): ${user.email}\nTemporary Password: ${password}\n\nPlease login and change your password immediately.\n\nLogin URL: ${process.env.CLIENT_URL || 'http://localhost:5173'}/login`,
                 html: emailTemplates.invitation(user.name, user.role, user.email, password)
             });
+            
+            console.log('[inviteUser] Email sent successfully to:', user.email);
         } catch (emailError) {
-            console.error('Failed to send invitation email:', emailError);
+            console.error('[inviteUser] Failed to send invitation email:', emailError);
+            console.error('[inviteUser] Email error details:', {
+                message: emailError.message,
+                code: emailError.code,
+                command: emailError.command,
+                stack: emailError.stack
+            });
+            console.error('[inviteUser] Email configuration check:', {
+                hasEmailHost: !!process.env.EMAIL_HOST,
+                hasEmailUser: !!process.env.EMAIL_USER,
+                hasEmailPassword: !!process.env.EMAIL_PASSWORD,
+                emailHost: process.env.EMAIL_HOST ? process.env.EMAIL_HOST.substring(0, 10) + '...' : 'NOT SET',
+                emailUser: process.env.EMAIL_USER ? process.env.EMAIL_USER.substring(0, 5) + '...' : 'NOT SET'
+            });
             // We tell the admin the user was created but email failed
             return res.status(201).json({
                 message: 'User created successfully, but invitation email failed to send. Please provide credentials manually.',
@@ -762,7 +822,12 @@ async function inviteUser(req, res) {
                     name: user.name,
                     email: user.email,
                     role: user.role
-                }
+                },
+                credentials: {
+                    email: user.email,
+                    temporaryPassword: password
+                },
+                emailError: emailError.message
             });
         }
 
@@ -776,6 +841,9 @@ async function inviteUser(req, res) {
             }
         });
     } catch (error) {
+        if (error.code === 11000) {
+            return res.status(400).json({ message: 'A user with this email or ID already exists' });
+        }
         console.error('Invite user error:', error);
         res.status(500).json({ message: error.message || 'Server error inviting user' });
     }

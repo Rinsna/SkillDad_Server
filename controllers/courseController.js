@@ -345,6 +345,133 @@ const addExercise = asyncHandler(async (req, res) => {
     }
 });
 
+// @route   PUT /api/courses/:id/modules/:moduleId
+// @access  Private (Admin/Instructor)
+const updateModule = asyncHandler(async (req, res) => {
+    const { title, description } = req.body;
+    const course = await Course.findById(req.params.id);
+
+    if (!course) {
+        res.status(404);
+        throw new Error('Course not found');
+    }
+
+    // Check authorization
+    if (course.instructor.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+        res.status(401);
+        throw new Error('Not authorized to update this module');
+    }
+
+    const module = course.modules.id(req.params.moduleId);
+    if (!module) {
+        res.status(404);
+        throw new Error('Module not found');
+    }
+
+    module.title = title || module.title;
+    module.description = description !== undefined ? description : module.description;
+
+    await course.save();
+    res.json(course);
+});
+
+// @route   DELETE /api/courses/:id/modules/:moduleId
+// @access  Private (Admin/Instructor)
+const deleteModule = asyncHandler(async (req, res) => {
+    const course = await Course.findById(req.params.id);
+
+    if (!course) {
+        res.status(404);
+        throw new Error('Course not found');
+    }
+
+    // Check authorization
+    if (course.instructor.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+        res.status(401);
+        throw new Error('Not authorized to delete this module');
+    }
+
+    const module = course.modules.id(req.params.moduleId);
+    if (!module) {
+        res.status(404);
+        throw new Error('Module not found');
+    }
+
+    module.remove();
+    await course.save();
+    res.json({ message: 'Module removed' });
+});
+
+// @route   PUT /api/courses/:id/modules/:moduleId/videos/:videoId
+// @access  Private (Admin/Instructor)
+const updateVideo = asyncHandler(async (req, res) => {
+    const { title, url, duration } = req.body;
+    const course = await Course.findById(req.params.id);
+
+    if (!course) {
+        res.status(404);
+        throw new Error('Course not found');
+    }
+
+    // Check authorization
+    if (course.instructor.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+        res.status(401);
+        throw new Error('Not authorized to update this video');
+    }
+
+    const module = course.modules.id(req.params.moduleId);
+    if (!module) {
+        res.status(404);
+        throw new Error('Module not found');
+    }
+
+    const video = module.videos.id(req.params.videoId);
+    if (!video) {
+        res.status(404);
+        throw new Error('Video not found');
+    }
+
+    video.title = title || video.title;
+    video.url = url || video.url;
+    video.duration = duration !== undefined ? duration : video.duration;
+
+    await course.save();
+    res.json(course);
+});
+
+// @route   DELETE /api/courses/:id/modules/:moduleId/videos/:videoId
+// @access  Private (Admin/Instructor)
+const deleteVideo = asyncHandler(async (req, res) => {
+    const course = await Course.findById(req.params.id);
+
+    if (!course) {
+        res.status(404);
+        throw new Error('Course not found');
+    }
+
+    // Check authorization
+    if (course.instructor.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+        res.status(401);
+        throw new Error('Not authorized to delete this video');
+    }
+
+    const module = course.modules.id(req.params.moduleId);
+    if (!module) {
+        res.status(404);
+        throw new Error('Module not found');
+    }
+
+    const video = module.videos.id(req.params.videoId);
+    if (!video) {
+        res.status(404);
+        throw new Error('Video not found');
+    }
+
+    video.remove();
+    await course.save();
+    res.json({ message: 'Video removed' });
+});
+
 module.exports = {
     getCourses,
     getCourse,
@@ -352,7 +479,11 @@ module.exports = {
     updateCourse,
     deleteCourse,
     addModule,
+    updateModule,
+    deleteModule,
     addVideo,
+    updateVideo,
+    deleteVideo,
     addExercise,
     getAdminCourses
 };

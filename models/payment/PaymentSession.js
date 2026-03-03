@@ -104,9 +104,8 @@ paymentSessionSchema.index({ transactionId: 1 });
 paymentSessionSchema.index({ student: 1, status: 1 });
 paymentSessionSchema.index({ status: 1, expiresAt: 1 });
 
-// TTL index for automatic expiration after 15 minutes
-// MongoDB will automatically delete documents where createdAt is older than 900 seconds
-paymentSessionSchema.index({ createdAt: 1 }, { expireAfterSeconds: 900 });
+// TTL index for automatic expiration is handled by the 'expires' property in the schema definition for 'createdAt' above.
+
 
 // Virtual for formatted amount
 paymentSessionSchema.virtual('amountFormatted').get(function () {

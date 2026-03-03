@@ -1,5 +1,6 @@
 const Discount = require('../models/discountModel');
 const User = require('../models/userModel');
+const socketService = require('../services/SocketService');
 
 // @desc    Get Partner Dashboard Stats
 // @route   GET /api/partner/stats
@@ -160,6 +161,9 @@ const registerStudent = async (req, res) => {
             student.assignedCourses.push(course);
             await student.save();
         }
+
+        // Notify all admins via WebSocket that a new user was created
+        socketService.notifyUserListUpdate('created', student);
 
         res.status(201).json({
             _id: student._id,

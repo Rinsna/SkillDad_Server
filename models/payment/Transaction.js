@@ -89,15 +89,19 @@ const transactionSchema = mongoose.Schema({
   // Gateway Details
   gatewayTransactionId: {
     type: String,
-    description: 'Transaction ID from payment gateway'
+    description: 'Order ID from Razorpay (razorpay_order_id)'
   },
-  gatewayOrderId: {
+  razorpayPaymentId: {
     type: String,
-    description: 'Order ID from HDFC SmartGateway'
+    description: 'Payment ID from Razorpay (razorpay_payment_id)'
+  },
+  razorpaySignature: {
+    type: String,
+    description: 'Payment signature from Razorpay for verification'
   },
   paymentMethod: {
     type: String,
-    enum: ['credit_card', 'debit_card', 'net_banking', 'upi', 'wallet', 'unknown'],
+    enum: ['card', 'netbanking', 'wallet', 'upi', 'emi', 'cardless_emi', 'paylater', 'unknown'],
     description: 'Payment method used by the student'
   },
   paymentMethodDetails: {
@@ -138,7 +142,7 @@ const transactionSchema = mongoose.Schema({
   // Callback & Webhook Data
   callbackData: {
     type: mongoose.Schema.Types.Mixed,
-    description: 'Raw callback data from HDFC gateway'
+    description: 'Raw callback data from payment gateway'
   },
   callbackReceivedAt: {
     type: Date,
@@ -287,6 +291,7 @@ const transactionSchema = mongoose.Schema({
 transactionSchema.index({ student: 1, createdAt: -1 });
 transactionSchema.index({ status: 1, createdAt: -1 });
 transactionSchema.index({ gatewayTransactionId: 1 });
+transactionSchema.index({ razorpayPaymentId: 1 });
 
 // TTL index for session expiration (MongoDB will automatically delete expired sessions)
 transactionSchema.index({ sessionExpiresAt: 1 }, { expireAfterSeconds: 0 });

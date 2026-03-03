@@ -193,38 +193,74 @@ Used by the backend to generate signatures for client-side meeting embedding.
 - **Description**: Maximum transaction amount allowed for HDFC SmartGateway (in INR)
 - **Example**: `HDFC_MAX_AMOUNT=500000`
 
-### Stripe Configuration
+### Razorpay Configuration
 
-#### `STRIPE_SECRET_KEY`
+Razorpay is the primary payment gateway for the SkillDad platform, supporting multiple payment methods including UPI, Cards, Netbanking, and Wallets.
+
+#### Getting Razorpay Credentials
+
+1. **Create a Razorpay Account**: Sign up at [razorpay.com](https://razorpay.com)
+2. **Access Dashboard**: Go to [dashboard.razorpay.com](https://dashboard.razorpay.com)
+3. **Get API Keys**: 
+   - Navigate to Settings → API Keys
+   - Generate Test/Live mode keys
+   - Download and securely store your Key ID and Key Secret
+4. **Configure Webhooks**:
+   - Navigate to Settings → Webhooks
+   - Add webhook URL: `https://yourdomain.com/api/payment/webhook`
+   - Select events: `payment.captured`, `payment.failed`
+   - Copy the webhook secret
+
+#### `RAZORPAY_KEY_ID`
+- **Type**: String
+- **Required**: Yes
+- **Description**: Razorpay API Key ID (can be exposed to client for checkout)
+- **Format**: Starts with `rzp_test_` (test mode) or `rzp_live_` (live mode)
+- **Example**: `RAZORPAY_KEY_ID=rzp_test_your_razorpay_key_id`
+
+#### `RAZORPAY_KEY_SECRET`
 - **Type**: String
 - **Required**: Yes
 - **Security**: Critical - Never expose to client
-- **Description**: Stripe secret key for API authentication
-- **Example**: `STRIPE_SECRET_KEY=sk_test_your_stripe_secret_key`
+- **Description**: Razorpay API Key Secret for server-side API authentication
+- **Example**: `RAZORPAY_KEY_SECRET=your_razorpay_key_secret`
 
-#### `STRIPE_PUBLISHABLE_KEY`
-- **Type**: String
-- **Required**: Yes
-- **Description**: Stripe publishable key (safe to expose to client)
-- **Example**: `STRIPE_PUBLISHABLE_KEY=pk_test_your_stripe_publishable_key`
-
-#### `STRIPE_WEBHOOK_SECRET`
+#### `RAZORPAY_WEBHOOK_SECRET`
 - **Type**: String
 - **Required**: Yes (for webhook verification)
-- **Description**: Stripe webhook signing secret for verifying webhook events
-- **Example**: `STRIPE_WEBHOOK_SECRET=whsec_test_secret`
+- **Security**: High - Used for webhook signature validation
+- **Description**: Razorpay webhook secret for verifying webhook events
+- **Example**: `RAZORPAY_WEBHOOK_SECRET=your_razorpay_webhook_secret`
+- **Setup**: Configure this in your Razorpay Dashboard webhook settings
 
-#### `STRIPE_SUCCESS_URL`
+#### `RAZORPAY_SUCCESS_URL`
 - **Type**: String (URL)
 - **Required**: Yes
 - **Description**: Redirect URL after successful payment
-- **Example**: `STRIPE_SUCCESS_URL=http://localhost:5173/dashboard/payment-callback?status=success`
+- **Example**: `RAZORPAY_SUCCESS_URL=http://localhost:5173/dashboard/payment-callback?status=success`
 
-#### `STRIPE_CANCEL_URL`
+#### `RAZORPAY_CANCEL_URL`
 - **Type**: String (URL)
 - **Required**: Yes
 - **Description**: Redirect URL when payment is cancelled
-- **Example**: `STRIPE_CANCEL_URL=http://localhost:5173/dashboard/payment-callback?status=cancel`
+- **Example**: `RAZORPAY_CANCEL_URL=http://localhost:5173/dashboard/payment-callback?status=cancel`
+
+#### Supported Payment Methods
+
+Razorpay supports the following payment methods in India:
+- **UPI**: Google Pay, PhonePe, Paytm, BHIM, and other UPI apps
+- **Cards**: Credit cards, Debit cards (Visa, Mastercard, RuPay, Amex)
+- **Netbanking**: All major Indian banks
+- **Wallets**: Paytm, PhonePe, Amazon Pay, Mobikwik, Freecharge
+- **EMI**: Credit card EMI and Cardless EMI options
+- **Pay Later**: LazyPay, Simpl, and other pay later services
+
+#### Currency Support
+
+- **Primary Currency**: INR (Indian Rupee)
+- **Amount Format**: Amounts are specified in paise (smallest currency unit)
+  - Example: ₹100.00 = 10000 paise
+  - Always multiply rupee amounts by 100 before sending to Razorpay
 
 ---
 
@@ -413,7 +449,9 @@ The platform uses Gupshup API for sending WhatsApp notifications.
 
 - [Zoom API Documentation](https://developers.zoom.us/docs/api/)
 - [Zoom Meeting SDK Documentation](https://developers.zoom.us/docs/meeting-sdk/)
-- [Stripe API Documentation](https://stripe.com/docs/api)
+- [Razorpay API Documentation](https://razorpay.com/docs/api/)
+- [Razorpay Payment Gateway Integration](https://razorpay.com/docs/payments/payment-gateway/)
+- [Razorpay Webhooks](https://razorpay.com/docs/webhooks/)
 - [Gupshup WhatsApp API](https://www.gupshup.io/developer/docs)
 
 ---

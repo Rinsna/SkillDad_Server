@@ -7,7 +7,11 @@ const {
     updateCourse,
     deleteCourse,
     addModule,
+    updateModule,
+    deleteModule,
     addVideo,
+    updateVideo,
+    deleteVideo,
     addExercise,
     getAdminCourses
 } = require('../controllers/courseController');
@@ -23,7 +27,9 @@ router.route('/admin').get(protect, getAdminCourses);
 router.route('/zoom-recordings/available').get(protect, getAvailableZoomRecordings);
 router.route('/:id').get(getCourse).put(protect, updateCourse).delete(protect, deleteCourse);
 router.route('/:id/modules').post(protect, addModule);
+router.route('/:id/modules/:moduleId').put(protect, updateModule).delete(protect, deleteModule);
 router.route('/:id/modules/:moduleId/videos').post(protect, addVideo);
+router.route('/:id/modules/:moduleId/videos/:videoId').put(protect, updateVideo).delete(protect, deleteVideo);
 router.route('/:id/modules/:moduleId/videos/:videoId/exercises').post(protect, addExercise);
 router.route('/:courseId/modules/:moduleIndex/videos/:videoIndex/link-zoom-recording').post(protect, linkZoomRecordingToVideo);
 router.route('/:courseId/modules/:moduleIndex/videos/:videoIndex/unlink-zoom-recording').delete(protect, unlinkZoomRecordingFromVideo);

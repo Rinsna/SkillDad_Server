@@ -13,7 +13,7 @@ const Course = require('../models/courseModel');
 const User = require('../models/userModel');
 const Discount = require('../models/discountModel');
 const Progress = require('../models/progressModel');
-const StripeGatewayService = require('../services/payment/StripeGatewayService');
+const RazorpayGatewayService = require('../services/payment/RazorpayGatewayService');
 const PaymentSessionManager = require('../services/payment/PaymentSessionManager');
 const SecurityLogger = require('../services/payment/SecurityLogger');
 const PCIComplianceService = require('../services/payment/PCIComplianceService');
@@ -25,18 +25,18 @@ const mongoose = require('mongoose');
 const path = require('path');
 const socketService = require('../services/SocketService');
 
-// Initialize services (lazy init for StripeGatewayService)
-let _stripeService = null;
-const getStripeService = () => {
-  if (!_stripeService) {
+// Initialize services (lazy init for RazorpayGatewayService)
+let _razorpayService = null;
+const getRazorpayService = () => {
+  if (!_razorpayService) {
     const gatewayConfig = {
-      secretKey: process.env.STRIPE_SECRET_KEY,
-      publishableKey: process.env.STRIPE_PUBLISHABLE_KEY,
-      webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+      keyId: process.env.RAZORPAY_KEY_ID,
+      keySecret: process.env.RAZORPAY_KEY_SECRET,
+      webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET,
     };
-    _stripeService = new StripeGatewayService(gatewayConfig);
+    _razorpayService = new RazorpayGatewayService(gatewayConfig);
   }
-  return _stripeService;
+  return _razorpayService;
 };
 const sessionManager = new PaymentSessionManager();
 const securityLogger = SecurityLogger;
@@ -203,7 +203,7 @@ const initiatePayment = async (req, res) => {
       });
     }
     // Check gateway configuration
-    const stripeService = getStripeService();
+    const razorpayService = getRazorpayService();
 
     // Validate course exists (Requirement 1.1)
     const course = await Course.findById(courseId);
@@ -408,40 +408,28 @@ const initiatePayment = async (req, res) => {
       initiatedAt: new Date(),
     });
 
-    // Generate Stripe payment session or intent
+    // Generate Razorpay order
     let paymentRequest;
     try {
-      const mode = req.body.mode || 'checkout'; // 'checkout' or 'elements'
+      paymentRequest = await razorpayService.createOrder({
+        transactionId,
+        amount: finalAmount,
+        currency: 'INR',
+        customerName: student.name,
+        customerEmail: student.email,
+        customerPhone: student.phone || '',
+        productInfo: `${course.title} - Course Enrollment`,
+        courseId: course._id,
+        studentId: student._id,
+        gstAmount,
+      });
 
-      if (mode === 'elements') {
-        paymentRequest = await stripeService.createPaymentIntent({
-          transactionId,
-          amount: finalAmount,
-          currency: 'INR',
-          customerName: student.name,
-          customerEmail: student.email,
-          customerPhone: student.phone || '',
-          productInfo: `${course.title} - Course Enrollment`,
-          courseId: course._id,
-          studentId: student._id,
-          gstAmount,
-        });
-      } else {
-        paymentRequest = await stripeService.createPaymentRequest({
-          transactionId,
-          amount: finalAmount,
-          currency: 'INR',
-          customerName: student.name,
-          customerEmail: student.email,
-          customerPhone: student.phone || '',
-          productInfo: `${course.title} - Course Enrollment`,
-          courseId: course._id,
-          studentId: student._id,
-          gstAmount,
-        });
-      }
+      // Store Razorpay order ID in transaction
+      transaction.gatewayTransactionId = paymentRequest.orderId;
+      await transaction.save();
+
     } catch (paymentError) {
-      // Handle gateway timeout during payment request creation (Requirement 7.9)
+      // Handle gateway timeout during order creation (Requirement 7.9)
       if (paymentError.message.includes('GATEWAY_TIMEOUT')) {
         // Update transaction status
         transaction.status = 'failed';
@@ -452,7 +440,7 @@ const initiatePayment = async (req, res) => {
 
         // Log the error
         await monitoringService.logAPIError(
-          'createPaymentRequest',
+          'createOrder',
           'GATEWAY_TIMEOUT',
           paymentError.message
         );
@@ -484,14 +472,13 @@ const initiatePayment = async (req, res) => {
     // Track payment attempt in monitoring (Requirement 16.1)
     await monitoringService.trackPaymentAttempt(transactionId, 'initiated');
 
-    // Return payment URL or client secret (Requirement 1.6)
+    // Return Razorpay order details (Requirement 1.6)
     res.status(200).json({
       success: true,
       transactionId,
       sessionId: session.sessionId,
-      paymentUrl: paymentRequest.paymentUrl,
-      clientSecret: paymentRequest.clientSecret, // Sent if mode === 'elements'
-      publishableKey: stripeService.publishableKey, // Needed for Elements provider
+      orderId: paymentRequest.orderId,
+      keyId: razorpayService.getPublishableKey(),
       expiresAt: session.expiresAt,
       amount: {
         original: originalAmount.toFixed(2),
@@ -527,31 +514,40 @@ const initiatePayment = async (req, res) => {
 
 
 /**
- * @desc    Handle payment callback from gateway
+ * @desc    Handle payment callback from Razorpay
  * @route   GET /api/payment/callback
  * @access  Public (signature verified)
  * 
  * Requirements: 3.1-3.9, 7.1-7.3, 7.8, 4.8, 6.8
  */
 const handleCallback = async (req, res) => {
-  const stripeService = getStripeService();
+  const razorpayService = getRazorpayService();
   // Start a MongoDB session for transaction support (Requirement 4.8, 6.8)
   const session = await mongoose.startSession();
 
   try {
     const callbackData = req.query;
 
-    // Extract transaction ID and payment status (Requirement 3.1)
-    let { transactionId, status, gatewayTransactionId, signature } = callbackData;
+    // Extract Razorpay payment details (Requirement 3.1)
+    let { razorpay_payment_id, razorpay_order_id, razorpay_signature } = callbackData;
 
-    if (!transactionId) {
-      return res.status(400).send('<h1>Invalid callback - missing transaction ID</h1>');
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).send('<h1>Invalid callback - missing required parameters</h1>');
     }
 
-    // Start transaction with retry logic for concurrent updates
-    let transaction;
-    // Find transaction without mongoose session locking due to non-replica set environment locally
-    transaction = await Transaction.findOne({ transactionId })
+    // Verify Razorpay signature (Requirement 3.2)
+    const isSignatureValid = razorpayService.verifyPaymentSignature({
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+      signature: razorpay_signature,
+    });
+
+    if (!isSignatureValid) {
+      return res.status(400).send('<h1>Invalid signature - payment verification failed</h1>');
+    }
+
+    // Find transaction by order ID
+    const transaction = await Transaction.findOne({ gatewayTransactionId: razorpay_order_id })
       .populate('student', 'name email')
       .populate({
         path: 'course',
@@ -562,6 +558,8 @@ const handleCallback = async (req, res) => {
     if (!transaction) {
       return res.status(404).send('<h1>Transaction not found</h1>');
     }
+
+    const transactionId = transaction.transactionId;
 
     // Check session expiration (Requirements 1.7, 14.6)
     const now = new Date();
@@ -630,43 +628,37 @@ const handleCallback = async (req, res) => {
       return res.send(expiredMessage);
     }
 
-    // Note: Stripe redirection doesn't require signature verification here
-    // as finality is handled by webhooks. We verify the session status.
-    // status and gatewayTransactionId are already declared above
-
+    // Fetch payment details from Razorpay (Requirement 3.3)
+    let paymentDetails;
     try {
-      // Find session to verify
-      const stripeSession = await stripeService.getSession(transaction.gatewayTransactionId || '');
-      if (stripeSession && stripeSession.payment_status === 'paid') {
-        status = 'success';
-        gatewayTransactionId = stripeSession.payment_intent;
-      }
-    } catch (err) {
-      console.warn('Could not verify Stripe session in callback, relying on URL parameter');
+      paymentDetails = await razorpayService.fetchPaymentDetails(razorpay_payment_id);
+    } catch (fetchError) {
+      console.error('Error fetching payment details:', fetchError);
+      return res.status(500).send('<h1>Error fetching payment details</h1>');
     }
 
     // Update transaction with callback data (Requirement 3.4)
     transaction.callbackData = callbackData;
     transaction.callbackReceivedAt = new Date();
     transaction.callbackSignatureVerified = true;
-    transaction.gatewayTransactionId = gatewayTransactionId;
+    transaction.razorpayPaymentId = razorpay_payment_id;
 
     // Extract payment method details if available
-    if (callbackData.paymentMethod) {
-      transaction.paymentMethod = callbackData.paymentMethod;
+    if (paymentDetails.method) {
+      transaction.paymentMethod = paymentDetails.method;
       transaction.paymentMethodDetails = {
-        cardType: callbackData.cardType,
-        cardLast4: callbackData.cardLast4,
-        bankName: callbackData.bankName,
-        upiId: callbackData.upiId,
-        walletProvider: callbackData.walletProvider,
+        cardType: paymentDetails.card?.network,
+        cardLast4: paymentDetails.card?.last4,
+        bankName: paymentDetails.bank,
+        upiId: paymentDetails.vpa,
+        walletProvider: paymentDetails.wallet,
       };
     }
 
     let confirmationMessage = '';
 
     // Handle success status (Requirements 3.4, 3.5)
-    if (status === 'success') {
+    if (paymentDetails.status === 'captured') {
       transaction.status = 'success';
       transaction.completedAt = new Date();
 
@@ -759,14 +751,14 @@ const handleCallback = async (req, res) => {
       // Track successful payment (Requirement 16.1)
       await monitoringService.trackPaymentAttempt(transactionId, 'success');
 
-    } else if (status === 'failed') {
+    } else if (paymentDetails.status === 'failed') {
       // Handle failure status (Requirements 3.6, 7.1, 7.2)
       transaction.status = 'failed';
-      transaction.errorCode = callbackData.errorCode || 'PAYMENT_FAILED';
-      transaction.errorMessage = callbackData.errorMessage || 'Payment failed';
+      transaction.errorCode = paymentDetails.error_code || 'PAYMENT_FAILED';
+      transaction.errorMessage = paymentDetails.error_description || 'Payment failed';
 
       // Categorize failure reason (Requirement 7.2)
-      const errorCode = callbackData.errorCode || '';
+      const errorCode = paymentDetails.error_code || '';
       if (errorCode.includes('INSUFFICIENT')) {
         transaction.errorCategory = 'insufficient_funds';
       } else if (errorCode.includes('DECLINED') || errorCode.includes('CARD')) {
@@ -804,7 +796,7 @@ const handleCallback = async (req, res) => {
 
     // Redirect to frontend confirmation page (Requirement 3.8)
     const frontendUrl = process.env.CLIENT_URL || 'http://localhost:5173';
-    const redirectUrl = `${frontendUrl}/dashboard/payment-callback?transactionId=${transactionId}&status=${status}&gatewayTransactionId=${gatewayTransactionId || ''}&signature=${signature || ''}`;
+    const redirectUrl = `${frontendUrl}/dashboard/payment-callback?transactionId=${transactionId}&status=${transaction.status}&razorpay_payment_id=${razorpay_payment_id}&razorpay_order_id=${razorpay_order_id}`;
 
     console.log('[DEBUG] Redirecting to frontend:', redirectUrl);
     res.redirect(redirectUrl);
@@ -885,56 +877,48 @@ function generateFailureMessage(transaction, transactionId) {
 
 
 /**
- * @desc    Handle webhook notification from HDFC gateway
+ * @desc    Handle webhook notification from Razorpay
  * @route   POST /api/payment/webhook
  * @access  Public (signature verified)
  * 
  * Requirements: 4.1-4.9, 4.8, 6.8
  */
 const handleWebhook = async (req, res) => {
-  const stripeService = getStripeService();
+  const razorpayService = getRazorpayService();
   // Start a MongoDB session for transaction support (Requirement 4.8, 6.8)
   const session = await mongoose.startSession();
 
   try {
-    const signature = req.headers['stripe-signature'];
-    let event;
+    const signature = req.headers['x-razorpay-signature'];
+    const webhookBody = req.rawBody;
 
-    try {
-      event = stripeService.verifyWebhook(req.rawBody, signature);
-    } catch (err) {
-      return res.status(400).send(`Webhook Error: ${err.message}`);
+    // Verify webhook signature (Requirement 4.2)
+    const isSignatureValid = razorpayService.verifyWebhookSignature(webhookBody, signature);
+
+    if (!isSignatureValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid webhook signature',
+      });
     }
 
-    if (event.type !== 'checkout.session.completed' &&
-      event.type !== 'payment_intent.succeeded' &&
-      event.type !== 'payment_intent.payment_failed') {
+    const webhookData = JSON.parse(webhookBody);
+    const event = webhookData.event;
+    const paymentEntity = webhookData.payload.payment.entity;
+
+    // Only process payment.captured and payment.failed events
+    if (event !== 'payment.captured' && event !== 'payment.failed') {
       return res.status(200).json({ received: true });
     }
 
-    let transactionId, status, gatewayTransactionId, sessionData;
+    const orderId = paymentEntity.order_id;
+    const paymentId = paymentEntity.id;
+    const status = event === 'payment.captured' ? 'success' : 'failed';
 
-    if (event.type === 'checkout.session.completed') {
-      sessionData = event.data.object;
-      transactionId = sessionData.client_reference_id;
-      status = sessionData.payment_status === 'paid' ? 'success' : 'failed';
-      gatewayTransactionId = sessionData.payment_intent;
-    } else if (event.type === 'payment_intent.succeeded') {
-      sessionData = event.data.object;
-      transactionId = sessionData.metadata.transactionId;
-      status = 'success';
-      gatewayTransactionId = sessionData.id;
-    } else if (event.type === 'payment_intent.payment_failed') {
-      sessionData = event.data.object;
-      transactionId = sessionData.metadata.transactionId;
-      status = 'failed';
-      gatewayTransactionId = sessionData.id;
-    }
-
-    if (!transactionId) {
+    if (!orderId) {
       return res.status(400).json({
         success: false,
-        message: 'Missing transaction ID',
+        message: 'Missing order ID',
       });
     }
 
@@ -947,8 +931,8 @@ const handleWebhook = async (req, res) => {
       try {
         await session.startTransaction();
 
-        // Find transaction with lock (using session for isolation)
-        transaction = await Transaction.findOne({ transactionId }).session(session);
+        // Find transaction by order ID with lock (using session for isolation)
+        transaction = await Transaction.findOne({ gatewayTransactionId: orderId }).session(session);
 
         if (!transaction) {
           await session.abortTransaction();
@@ -979,7 +963,7 @@ const handleWebhook = async (req, res) => {
 
     // Store webhook data
     transaction.webhookData.push({
-      data: sessionData,
+      data: webhookData,
       receivedAt: new Date(),
       processed: false,
     });
@@ -990,7 +974,7 @@ const handleWebhook = async (req, res) => {
     if (status === 'success' && transaction.status !== 'success') {
       transaction.status = 'success';
       transaction.completedAt = new Date();
-      transaction.gatewayTransactionId = gatewayTransactionId;
+      transaction.razorpayPaymentId = paymentId;
 
       // Activate enrollment if not already active (Requirement 4.6)
       let enrollment = await Enrollment.findOne({
@@ -1045,7 +1029,7 @@ const handleWebhook = async (req, res) => {
       // Generate receipt if not already generated
       if (!transaction.receiptUrl) {
         try {
-          const receipt = await receiptGenerator.generateReceipt(transactionId);
+          const receipt = await receiptGenerator.generateReceipt(transaction.transactionId);
           transaction.receiptNumber = receipt.receiptNumber;
           transaction.receiptUrl = receipt.receiptUrl;
           transaction.receiptGeneratedAt = new Date();
@@ -1090,8 +1074,8 @@ const handleWebhook = async (req, res) => {
 
     } else if (status === 'failed' && transaction.status === 'pending') {
       transaction.status = 'failed';
-      transaction.errorCode = webhookData.errorCode || 'PAYMENT_FAILED';
-      transaction.errorMessage = webhookData.errorMessage || 'Payment failed';
+      transaction.errorCode = paymentEntity.error_code || 'PAYMENT_FAILED';
+      transaction.errorMessage = paymentEntity.error_description || 'Payment failed';
 
       // Mark webhook as processed
       transaction.webhookData[transaction.webhookData.length - 1].processed = true;
@@ -1164,7 +1148,7 @@ const handleWebhook = async (req, res) => {
  * Requirements: 11.6, 11.7
  */
 const checkPaymentStatus = async (req, res) => {
-  const stripeService = getStripeService();
+  const razorpayService = getRazorpayService();
   try {
     const { transactionId } = req.params;
     const userId = req.user.id;
@@ -1190,19 +1174,19 @@ const checkPaymentStatus = async (req, res) => {
       });
     }
 
-    // Query real-time status from gateway (Requirement 11.6)
+    // Query real-time status from Razorpay (Requirement 11.6)
     try {
-      if (transaction.gatewayTransactionId && transaction.gatewayTransactionId.startsWith('pi_')) {
-        const intent = await stripeService.stripe.paymentIntents.retrieve(transaction.gatewayTransactionId);
-        if (intent.status === 'succeeded' && transaction.status !== 'success') {
-          // We can manually trigger success if it somehow wasn't caught by webhook
+      if (transaction.razorpayPaymentId) {
+        const paymentDetails = await razorpayService.fetchPaymentDetails(transaction.razorpayPaymentId);
+        if (paymentDetails.status === 'captured' && transaction.status !== 'success') {
+          // Manually trigger success if it wasn't caught by webhook
           transaction.status = 'success';
           transaction.completedAt = new Date();
           await transaction.save();
         }
       } else if (transaction.gatewayTransactionId) {
-        const stripeSession = await stripeService.getSession(transaction.gatewayTransactionId);
-        if (stripeSession.payment_status === 'paid' && transaction.status !== 'success') {
+        const orderDetails = await razorpayService.fetchOrderDetails(transaction.gatewayTransactionId);
+        if (orderDetails.status === 'paid' && transaction.status !== 'success') {
           transaction.status = 'success';
           transaction.completedAt = new Date();
           await transaction.save();
@@ -1331,7 +1315,7 @@ const getPaymentHistory = async (req, res) => {
  * Requirements: 8.1-8.10, 17.10
  */
 const processRefund = async (req, res) => {
-  const stripeService = getStripeService();
+  const razorpayService = getRazorpayService();
   try {
     const { transactionId, amount, reason } = req.body;
     const adminId = req.user.id;
@@ -1383,9 +1367,9 @@ const processRefund = async (req, res) => {
       });
     }
 
-    // Send refund request to Stripe
-    const refundResponse = await stripeService.initiateRefund(
-      transaction.gatewayTransactionId,
+    // Send refund request to Razorpay
+    const refundResponse = await razorpayService.initiateRefund(
+      transaction.razorpayPaymentId,
       refundAmount
     );
 
@@ -1485,7 +1469,7 @@ const processRefund = async (req, res) => {
  * Requirements: 7.3, 7.4, 7.5, 7.6, 6.9
  */
 const retryPayment = async (req, res) => {
-  const stripeService = getStripeService();
+  const razorpayService = getRazorpayService();
   try {
     const { transactionId } = req.params;
     const userId = req.user.id;
@@ -1580,8 +1564,8 @@ const retryPayment = async (req, res) => {
     newTransaction.sessionExpiresAt = session.expiresAt;
     await newTransaction.save();
 
-    // Generate payment request
-    const paymentRequest = await stripeService.createPaymentRequest({
+    // Generate Razorpay order
+    const paymentRequest = await razorpayService.createOrder({
       transactionId: newTransactionId,
       amount: parseFloat(originalTransaction.finalAmount.toString()),
       currency: 'INR',
@@ -1594,6 +1578,10 @@ const retryPayment = async (req, res) => {
       gstAmount: originalTransaction.gstAmount,
     });
 
+    // Store Razorpay order ID in transaction
+    newTransaction.gatewayTransactionId = paymentRequest.orderId;
+    await newTransaction.save();
+
     // Log retry attempt
     await securityLogger.logPaymentAttempt(
       newTransactionId,
@@ -1605,7 +1593,8 @@ const retryPayment = async (req, res) => {
     res.status(200).json({
       success: true,
       newTransactionId,
-      paymentUrl: paymentRequest.paymentUrl,
+      orderId: paymentRequest.orderId,
+      keyId: razorpayService.getPublishableKey(),
       retryCount: newTransaction.retryCount,
       expiresAt: session.expiresAt,
     });

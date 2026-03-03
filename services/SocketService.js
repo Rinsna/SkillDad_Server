@@ -95,6 +95,36 @@ class SocketService {
             this.io.emit(event, data);
         }
     }
+
+    /**
+     * Broadcast to all admin users
+     */
+    broadcastToAdmins(event, data) {
+        if (this.io) {
+            // Emit to all connected sockets (admins will filter on client side)
+            this.io.emit(event, data);
+        }
+    }
+
+    /**
+     * Notify admins of user list changes
+     */
+    notifyUserListUpdate(action, user) {
+        if (this.io) {
+            this.io.emit('userListUpdate', {
+                action, // 'created', 'updated', 'deleted'
+                user: {
+                    _id: user._id,
+                    name: user.name,
+                    email: user.email,
+                    role: user.role,
+                    isVerified: user.isVerified,
+                    createdAt: user.createdAt
+                },
+                timestamp: new Date()
+            });
+        }
+    }
 }
 
 module.exports = new SocketService();

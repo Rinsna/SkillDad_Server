@@ -83,6 +83,39 @@ router.delete('/students/:id', protect, checkAdmin, deleteStudent);
 // Partner Logo Management Routes
 router.get('/partner-logos', protect, checkAdmin, getPartnerLogos);
 router.post('/partner-logos', protect, checkAdmin, createPartnerLogo);
+router.post('/partner-logos/seed', protect, checkAdmin, async (req, res) => {
+    // One-time seed endpoint for partner logos
+    try {
+        const PartnerLogo = require('../models/partnerLogoModel');
+        
+        const samplePartners = [
+            { name: 'TechCorp Solutions', logo: '/assets/logos/techcorp.png', type: 'corporate', order: 1, isActive: true },
+            { name: 'Global Innovations Ltd', logo: '/assets/logos/global-innovations.png', type: 'corporate', order: 2, isActive: true },
+            { name: 'Digital Dynamics Inc', logo: '/assets/logos/digital-dynamics.png', type: 'corporate', order: 3, isActive: true },
+            { name: 'Enterprise Systems Group', logo: '/assets/logos/enterprise-systems.png', type: 'corporate', order: 4, isActive: true },
+            { name: 'CloudTech Partners', logo: '/assets/logos/cloudtech.png', type: 'corporate', order: 5, isActive: true },
+            { name: 'DataFlow Corporation', logo: '/assets/logos/dataflow.png', type: 'corporate', order: 6, isActive: true },
+            { name: 'NextGen Technologies', logo: '/assets/logos/nextgen.png', type: 'corporate', order: 7, isActive: true },
+            { name: 'Smart Solutions International', logo: '/assets/logos/smart-solutions.png', type: 'corporate', order: 8, isActive: true },
+            { name: 'Innovate Labs', logo: '/assets/logos/innovate-labs.png', type: 'corporate', order: 9, isActive: true }
+        ];
+        
+        // Clear existing (optional)
+        await PartnerLogo.deleteMany({});
+        
+        // Insert sample partners
+        const inserted = await PartnerLogo.insertMany(samplePartners);
+        
+        res.json({
+            success: true,
+            message: `Successfully seeded ${inserted.length} partner logos`,
+            partners: inserted.map(p => ({ name: p.name, order: p.order }))
+        });
+    } catch (error) {
+        console.error('Seed error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
 router.put('/partner-logos/:id', protect, checkAdmin, updatePartnerLogo);
 router.delete('/partner-logos/:id', protect, checkAdmin, deletePartnerLogo);
 

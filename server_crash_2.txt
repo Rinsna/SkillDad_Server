@@ -1,0 +1,64 @@
+﻿[dotenv@17.3.1] injecting env (40) from .env -- tip: ≡ƒñû agentic secret storage: https://dotenvx.com/as2
+[Job Scheduler] Initializing scheduled jobs...
+[Reconciliation Job] Scheduling daily reconciliation job for 2:00 AM
+[Reconciliation Job] Job scheduled successfully with expression: 0 2 * * *
+[Reconciliation Job] Timezone: Asia/Kolkata
+[Reconciliation Job] Next run will be at 2:00 AM
+[Session Cleanup Job] Scheduling session cleanup job to run every hour
+[Session Cleanup Job] Job scheduled successfully with expression: 0 * * * *
+[Session Cleanup Job] Timezone: Asia/Kolkata
+[Session Cleanup Job] Next run will be at the top of the next hour
+[Monitoring Alert Job] Scheduling monitoring alert job to run every 5 minutes
+[Monitoring Alert Job] Job scheduled successfully with expression: */5 * * * *
+[Monitoring Alert Job] Timezone: Asia/Kolkata
+[Monitoring Alert Job] Next run will be in 5 minutes
+[Monitoring Alert Job] Alert cooldown period: 30 minutes
+[Job Scheduler] All jobs initialized successfully
+[Job Scheduler] Active jobs: [ 'dailyReconciliation', 'sessionCleanup', 'monitoringAlert' ]
+Scheduled jobs initialized successfully
+[Server] Attempting to start on port: 3030
+node : node:events:486
+At line:1 char:1
++ node server.js 2>&1 | 
+Out-File -FilePath 
+server_crash_2.txt -Encoding 
+...
++ ~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo           
+   : NotSpecified: (node:ev  
+  ents:486:String) [], Rem   
+ oteException
+    + FullyQualifiedErrorId  
+   : NativeCommandError
+ 
+      throw er; // Unhandled 
+'error' event
+      ^
+
+Error: listen EADDRINUSE: 
+address already in use 
+0.0.0.0:3030
+    at 
+Server.setupListenHandle [as 
+_listen2] (node:net:1940:16)
+    at listenInCluster 
+(node:net:1997:12)
+    at node:net:2206:7
+    at process.processTicksAn
+dRejections (node:internal/pr
+ocess/task_queues:89:21)
+Emitted 'error' event on 
+Server instance at:
+    at emitErrorNT 
+(node:net:1976:8)
+    at process.processTicksAn
+dRejections (node:internal/pr
+ocess/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '0.0.0.0',
+  port: 3030
+}
+
+Node.js v24.11.1

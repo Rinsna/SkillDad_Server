@@ -12,7 +12,7 @@ const PCIComplianceService = require('./PCIComplianceService');
 const ReceiptGeneratorService = require('./ReceiptGeneratorService');
 const ReconciliationService = require('./ReconciliationService');
 const SecurityLogger = require('./SecurityLogger');
-const StripeGatewayService = require('./StripeGatewayService');
+const RazorpayGatewayService = require('./RazorpayGatewayService');
 
 module.exports = {
   DataFormatterService,
@@ -23,5 +23,5 @@ module.exports = {
   ReceiptGeneratorService,
   ReconciliationService,
   SecurityLogger,
-  StripeGatewayService
+  RazorpayGatewayService
 };

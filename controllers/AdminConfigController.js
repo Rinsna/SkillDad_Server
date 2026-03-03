@@ -16,18 +16,18 @@ class AdminConfigController {
    */
   async getGatewayConfig(req, res) {
     try {
-      // Since we're using Stripe with environment variables, 
+      // Since we're using Razorpay with environment variables, 
       // there might not be a database-stored config for credentials.
       // But we can return some general settings.
       res.json({
         success: true,
         config: {
-          gatewayName: 'Stripe',
+          gatewayName: 'Razorpay',
           environment: process.env.NODE_ENV || 'development',
           currency: 'INR',
           minTransactionAmount: 1,
           maxTransactionAmount: 500000,
-          publishableKey: process.env.STRIPE_PUBLISHABLE_KEY,
+          publishableKey: process.env.RAZORPAY_KEY_ID,
           isActive: true,
         },
       });
@@ -41,7 +41,7 @@ class AdminConfigController {
   }
 
   /**
-   * Update gateway configuration - Placeholder for Stripe-related settings
+   * Update gateway configuration - Placeholder for Razorpay-related settings
    */
   async updateGatewayConfig(req, res) {
     res.status(501).json({
@@ -55,17 +55,17 @@ class AdminConfigController {
    */
   async testGatewayConnection(req, res) {
     try {
-      // Simple health check for Stripe integration
-      // In a real scenario, this could check if the Stripe client is initialized
-      const isConfigured = !!process.env.STRIPE_SECRET_KEY;
+      // Simple health check for Razorpay integration
+      // In a real scenario, this could check if the Razorpay client is initialized
+      const isConfigured = !!process.env.RAZORPAY_KEY_SECRET;
 
       res.json({
         success: true,
         gatewayStatus: isConfigured ? 'connected' : 'disconnected',
         timestamp: new Date().toISOString(),
         message: isConfigured
-          ? 'Successfully connected to Stripe'
-          : 'Stripe secret key is missing in configuration',
+          ? 'Successfully connected to Razorpay'
+          : 'Razorpay secret key is missing in configuration',
       });
     } catch (error) {
       console.error('Gateway connection test error:', error);

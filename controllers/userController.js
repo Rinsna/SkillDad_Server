@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const User = require('../models/userModel');
 const sendEmail = require('../utils/sendEmail');
 const emailTemplates = require('../utils/emailTemplates');
+const socketService = require('../services/SocketService');
 
 const generateToken = (id) => {
     return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -24,21 +25,15 @@ const registerUser = async (req, res) => {
             return res.status(400).json({ message: 'Please provide your name, email, and password.' });
         }
 
-        // Phone is mandatory for all public registrations (students)
-        if (!phone || phone.trim() === '') {
-            return res.status(400).json({ message: 'WhatsApp number is required.' });
-        }
-
         // Check if user exists
         const userExists = await User.findOne({ email });
         if (userExists) {
             return res.status(400).json({ message: 'An account with this email already exists. Please login.' });
         }
 
-        // Public registration ONLY creates student accounts
-        // Universities and B2B partners are created by admin only
         let userRole = 'student';
         let discountRate = 0;
+        let isAdmin = false;
 
         // Check if admin is creating the user
         if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
@@ -47,12 +42,18 @@ const registerUser = async (req, res) => {
                 const decoded = jwt.verify(token, process.env.JWT_SECRET);
                 const creator = await User.findById(decoded.id).select('role');
                 if (creator && creator.role === 'admin') {
+                    isAdmin = true;
                     userRole = req.body.role || 'student';
                     discountRate = req.body.discountRate || 0;
                 }
             } catch (e) {
                 console.error("Token admin check failed:", e.message);
             }
+        }
+
+        // Phone is mandatory for all public registrations, but admin can skip it
+        if (!isAdmin && (!phone || phone.trim() === '')) {
+            return res.status(400).json({ message: 'WhatsApp number is required.' });
         }
 
         console.log(`Creating user with role: ${userRole}...`);
@@ -64,12 +65,15 @@ const registerUser = async (req, res) => {
             isVerified: true,
             discountRate: discountRate,
             profile: {
-                phone: phone.trim()
+                phone: phone ? phone.trim() : ''
             }
         });
 
         if (user) {
             console.log('User created successfully:', user._id);
+
+            // Notify all admins via WebSocket that a new user was created
+            socketService.notifyUserListUpdate('created', user);
 
             // Send response FIRST - then fire notification in background (non-blocking)
             res.status(201).json({
@@ -84,13 +88,26 @@ const registerUser = async (req, res) => {
             // Fire-and-forget welcome notification AFTER response is sent
             setImmediate(async () => {
                 try {
-                    const notificationService = require('../services/NotificationService');
-                    await notificationService.send(
-                        { name: user.name, email: user.email, phone: user.profile?.phone },
-                        'welcome'
-                    );
+                    if (isAdmin && userRole !== 'student') {
+                        // Send invitation email for admin-created partners
+                        const sendEmail = require('../utils/sendEmail');
+                        const emailTemplates = require('../utils/emailTemplates');
+                        await sendEmail({
+                            email: user.email,
+                            subject: 'Welcome to SkillDad: Integration Successful',
+                            message: `Hello ${user.name},\n\nYou have been invited to SkillDad as a ${user.role}.`,
+                            html: emailTemplates.invitation(user.name, user.role, user.email, password)
+                        });
+                    } else {
+                        // Standard student welcome notification
+                        const notificationService = require('../services/NotificationService');
+                        await notificationService.send(
+                            { name: user.name, email: user.email, phone: user.profile?.phone },
+                            'welcome'
+                        );
+                    }
                 } catch (emailError) {
-                    console.error('Welcome notification failed (non-blocking):', emailError.message);
+                    console.error('Welcome/Invitation notification failed (non-blocking):', emailError.message);
                 }
             });
         } else {

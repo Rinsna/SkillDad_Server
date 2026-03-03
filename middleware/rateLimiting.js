@@ -21,7 +21,7 @@ const getRedisStore = () => {
   }
 
   try {
-    const { RedisStore } = require('rate-limit-redis');
+    const RedisStore = require('rate-limit-redis').default || require('rate-limit-redis');
     const redis = require('redis');
 
     const redisClient = redis.createClient({

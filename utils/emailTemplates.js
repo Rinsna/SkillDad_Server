@@ -68,18 +68,47 @@ const templates = {
     },
 
     invitation: (name, role, email, password) => {
+        // Customize message based on role
+        let roleMessage = '';
+        let roleDescription = '';
+        
+        if (role === 'partner' || role === 'b2b') {
+            roleMessage = 'B2B Partner';
+            roleDescription = 'As a B2B Partner, you will have access to manage your organization\'s courses, track student progress, and collaborate with our platform to deliver exceptional learning experiences.';
+        } else if (role === 'university') {
+            roleMessage = 'University Partner';
+            roleDescription = 'As a University Partner, you can create and manage courses, schedule live sessions, conduct exams, and monitor student performance across your institution.';
+        } else if (role === 'instructor') {
+            roleMessage = 'Instructor';
+            roleDescription = 'As an Instructor, you can create engaging course content, conduct live sessions, and guide students through their learning journey.';
+        } else {
+            roleMessage = role.charAt(0).toUpperCase() + role.slice(1);
+            roleDescription = 'You now have access to the SkillDad platform with your assigned role and permissions.';
+        }
+        
         const content = `
             <p style="${baseStyle.p}">Hello <strong>${name}</strong>,</p>
-            <p style="${baseStyle.p}">You have been invited to join the SkillDad platform as a <strong>${role}</strong>.</p>
+            <p style="${baseStyle.p}">Welcome to SkillDad! We're excited to have you join our platform as a <strong>${roleMessage}</strong>.</p>
+            <p style="${baseStyle.p}">${roleDescription}</p>
             <div style="${baseStyle.highlight}">
-                <span style="${baseStyle.label}">Access Credentials</span>
-                <p style="margin: 0 0 8px 0;"><strong style="font-size: 14px;">Email:</strong> <span style="${baseStyle.value}">${email}</span></p>
-                <p style="margin: 0;"><strong style="font-size: 14px;">Temp Password:</strong> <span style="${baseStyle.value}">${password}</span></p>
+                <span style="${baseStyle.label}">Your Login Credentials</span>
+                <p style="margin: 0 0 12px 0;"><strong style="font-size: 14px;">Username (Email):</strong><br/><span style="${baseStyle.value}">${email}</span></p>
+                <p style="margin: 0;"><strong style="font-size: 14px;">Temporary Password:</strong><br/><span style="${baseStyle.value}">${password}</span></p>
             </div>
-            <p style="${baseStyle.p}">Please secure your account by changing your passphrase upon initial login.</p>
+            <div style="background-color: #FEF3C7; border-left: 4px solid #F59E0B; padding: 16px; margin: 24px 0; border-radius: 8px;">
+                <p style="margin: 0; font-size: 14px; color: #92400E;"><strong>⚠️ Important Security Notice:</strong><br/>For your account security, please change your password immediately after your first login.</p>
+            </div>
+            <p style="${baseStyle.p}"><strong>Getting Started:</strong></p>
+            <ol style="margin: 0 0 16px 0; padding-left: 20px; color: #4B5563;">
+                <li style="margin-bottom: 8px;">Click the button below to access the login page</li>
+                <li style="margin-bottom: 8px;">Enter your email and temporary password</li>
+                <li style="margin-bottom: 8px;">Change your password in your profile settings</li>
+                <li>Explore your dashboard and start using the platform</li>
+            </ol>
+            <p style="${baseStyle.p}">If you have any questions or need assistance, our support team is here to help at <a href="mailto:support@skilldad.com" style="color: #7C3AED; text-decoration: none;">support@skilldad.com</a></p>
         `;
-        return layout('System Access Granted', content, {
-            text: 'Authenticate Now',
+        return layout('Welcome to SkillDad - Account Created', content, {
+            text: 'Login to Your Account',
             url: getClientUrl('/login')
         });
     },

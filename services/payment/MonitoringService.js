@@ -275,7 +275,7 @@ class MonitoringService {
    * @private
    */
   async _checkGatewayConnectivity() {
-    // In production, this would make an actual API call to Stripe API
+    // In production, this would make an actual API call to Razorpay API
     // For now, we'll simulate based on recent API response times
     const recentApiCalls = this.metrics.apiResponseTimes.slice(-10);
 
