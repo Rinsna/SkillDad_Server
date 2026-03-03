@@ -44,10 +44,10 @@ const canViewSession = (user, session) => {
         const sessionUniversityId = extractId(session.university);
         const sessionInstructorId = extractId(session.instructor);
         const userId = user._id.toString();
-        
+
         const universityMatch = sessionUniversityId === userId;
         const instructorMatch = sessionInstructorId === userId;
-        
+
         return universityMatch || instructorMatch;
     }
 
@@ -716,10 +716,12 @@ const getRecordingStatus = asyncHandler(async (req, res) => {
         });
     }
 
-    /* Sync from Zoom if still processing */
-    if (session.recording?.status === 'processing' && session.zoom?.meetingId) {
+    /* Sync from Zoom if not yet completed */
+    const recordingStatus = session.recording?.status || 'pending';
+    if (['pending', 'processing', 'failed'].includes(recordingStatus) && session.zoom?.meetingId) {
         try {
-            // Trigger sync for processing recordings
+            console.log(`[Zoom] Triggering manual sync for session ${req.params.id} (Current status: ${recordingStatus})`);
+            // Trigger sync for non-completed recordings
             await syncZoomRecordings(req.params.id);
 
             // Fetch updated session data
@@ -728,7 +730,7 @@ const getRecordingStatus = asyncHandler(async (req, res) => {
 
             return res.json(updatedSession.recording || { status: 'pending' });
         } catch (error) {
-            console.error('Error syncing Zoom recordings:', error.message);
+            console.error('[Zoom] Error syncing recordings on-demand:', error.message);
             // Return current recording status even if sync fails
         }
     }
