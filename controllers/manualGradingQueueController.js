@@ -3,6 +3,7 @@ const Submission = require('../models/submissionModel');
 const InteractiveContent = require('../models/interactiveContentModel');
 const Course = require('../models/courseModel');
 const Progress = require('../models/progressModel');
+const ProgressTrackerService = require('../services/ProgressTrackerService');
 
 /**
  * @desc    Get pending submissions for manual grading filtered by course
@@ -142,7 +143,7 @@ const gradeSubmission = asyncHandler(async (req, res) => {
         }
 
         // Update progress record
-        await updateProgressRecord(submission);
+        await ProgressTrackerService.recordCompletion(submission);
     }
 
     // Save the updated submission
@@ -304,93 +305,6 @@ const getSubmissionStats = asyncHandler(async (req, res) => {
         }
     });
 });
-
-/**
- * Helper function to update progress record after grading
- * Requirements: 7.6, 9.1, 9.2, 9.3, 9.4
- */
-const updateProgressRecord = async (submission) => {
-    try {
-        // Find or create progress record
-        let progress = await Progress.findOne({
-            user: submission.user,
-            course: submission.course
-        });
-
-        if (!progress) {
-            progress = await Progress.create({
-                user: submission.user,
-                course: submission.course,
-                completedVideos: [],
-                completedExercises: [],
-                completedPractices: [],
-                completedQuizzes: [],
-                projectSubmissions: []
-            });
-        }
-
-        const contentId = submission.content._id || submission.content;
-
-        // Update progress based on content type
-        if (submission.contentType === 'exercise') {
-            // Requirement 9.2: Track exercises with attempts, best score, completion
-            const existingIndex = progress.completedExercises.findIndex(
-                ex => ex.content.toString() === contentId.toString()
-            );
-
-            if (existingIndex >= 0) {
-                // Update existing exercise progress
-                const existing = progress.completedExercises[existingIndex];
-                existing.attempts += 1;
-                existing.bestScore = Math.max(existing.bestScore, submission.score);
-                existing.lastAttemptAt = submission.submittedAt;
-                existing.isCompleted = submission.score >= 70; // 70% threshold for completion
-            } else {
-                // Add new exercise progress
-                progress.completedExercises.push({
-                    content: contentId,
-                    attempts: submission.attemptNumber,
-                    bestScore: submission.score,
-                    lastAttemptAt: submission.submittedAt,
-                    isCompleted: submission.score >= 70
-                });
-            }
-        } else if (submission.contentType === 'practice') {
-            // Requirement 9.3: Track practices - record completion when submitted
-            if (!progress.completedPractices.includes(contentId)) {
-                progress.completedPractices.push(contentId);
-            }
-        } else if (submission.contentType === 'quiz') {
-            // Requirement 9.4: Track quizzes with attempts, best score, passing status
-            const existingIndex = progress.completedQuizzes.findIndex(
-                qz => qz.content.toString() === contentId.toString()
-            );
-
-            if (existingIndex >= 0) {
-                // Update existing quiz progress
-                const existing = progress.completedQuizzes[existingIndex];
-                existing.attempts += 1;
-                existing.bestScore = Math.max(existing.bestScore, submission.score);
-                existing.isPassing = existing.isPassing || submission.isPassing;
-                existing.lastAttemptAt = submission.submittedAt;
-            } else {
-                // Add new quiz progress
-                progress.completedQuizzes.push({
-                    content: contentId,
-                    attempts: submission.attemptNumber,
-                    bestScore: submission.score,
-                    isPassing: submission.isPassing,
-                    lastAttemptAt: submission.submittedAt
-                });
-            }
-        }
-
-        await progress.save();
-    } catch (error) {
-        console.error('Error updating progress record:', error);
-        // Don't throw error - progress update failure shouldn't block grading
-    }
-};
 
 module.exports = {
     getPendingSubmissions,

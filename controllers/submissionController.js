@@ -4,6 +4,7 @@ const InteractiveContent = require('../models/interactiveContentModel');
 const Course = require('../models/courseModel');
 const Enrollment = require('../models/enrollmentModel');
 const AutoGraderService = require('../services/AutoGraderService');
+const ProgressTrackerService = require('../services/ProgressTrackerService');
 
 /**
  * @desc    Submit answers to interactive content
@@ -158,6 +159,16 @@ const submitAnswer = asyncHandler(async (req, res) => {
         submittedAt: currentTime,
         timeSpent: timeSpentSeconds
     });
+
+    // Requirement 9.1: Update progress for auto-graded submissions
+    if (status === 'graded') {
+        try {
+            await ProgressTrackerService.recordCompletion(submission);
+        } catch (error) {
+            console.error('Error updating progress:', error);
+            // Don't fail the submission if progress update fails
+        }
+    }
 
     // Requirement 5.7: Return submission result
     res.status(201).json({
@@ -402,6 +413,16 @@ const retrySubmission = asyncHandler(async (req, res) => {
         submittedAt: currentTime,
         timeSpent: timeSpentSeconds
     });
+
+    // Requirement 9.1: Update progress for auto-graded retry submissions
+    if (status === 'graded') {
+        try {
+            await ProgressTrackerService.recordCompletion(newSubmission);
+        } catch (error) {
+            console.error('Error updating progress:', error);
+            // Don't fail the submission if progress update fails
+        }
+    }
 
     res.status(201).json({
         success: true,
