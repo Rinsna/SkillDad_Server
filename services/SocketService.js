@@ -17,12 +17,13 @@ class SocketService {
                     }
                     
                     // Allow Vercel deployments
-                    if (origin.endsWith('.vercel.app')) {
+                    if (origin.includes('.vercel.app')) {
                         return callback(null, true);
                     }
                     
-                    // Allow localhost and 127.0.0.1 on common ports
-                    if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
+                    // Allow localhost and 127.0.0.1 on any port
+                    if (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1') ||
+                        origin.startsWith('https://localhost') || origin.startsWith('https://127.0.0.1')) {
                         return callback(null, true);
                     }
                     
@@ -31,10 +32,13 @@ class SocketService {
                         return callback(null, true);
                     }
                     
+                    // Log rejected origins for debugging
+                    console.log('[Socket.IO] CORS rejected origin:', origin);
                     return callback(new Error('CORS not allowed'));
                 },
                 methods: ['GET', 'POST'],
-                credentials: true
+                credentials: true,
+                allowedHeaders: ['Content-Type', 'Authorization']
             }
         });
 
