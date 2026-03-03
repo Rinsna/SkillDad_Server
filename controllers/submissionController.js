@@ -170,6 +170,25 @@ const submitAnswer = asyncHandler(async (req, res) => {
         }
     }
 
+    // Requirement 10.1, 10.2, 10.3, 10.4, 10.5: Solution display logic
+    const shouldShowSolutions = 
+        content.showSolutionAfter === 'immediate' || 
+        (content.showSolutionAfter === 'submission' && status === 'graded');
+
+    // Prepare response with conditional solution display
+    const responseAnswers = gradedAnswers.map((answer, index) => {
+        const question = content.questions[index];
+        const responseAnswer = { ...answer };
+
+        // Include solutions based on showSolutionAfter setting
+        if (shouldShowSolutions) {
+            responseAnswer.correctAnswer = question.correctAnswer;
+            responseAnswer.explanation = question.explanation;
+        }
+
+        return responseAnswer;
+    });
+
     // Requirement 5.7: Return submission result
     res.status(201).json({
         success: true,
@@ -177,7 +196,7 @@ const submitAnswer = asyncHandler(async (req, res) => {
         score: scorePercentage,
         isPassing,
         status,
-        answers: gradedAnswers,
+        answers: responseAnswers,
         attemptNumber: submission.attemptNumber,
         timeSpent: timeSpentSeconds
     });
@@ -222,9 +241,31 @@ const getSubmission = asyncHandler(async (req, res) => {
         }
     }
 
+    // Requirement 10.1, 10.2, 10.3, 10.4, 10.5: Solution display logic for students
+    let responseSubmission = submission.toObject();
+    
+    if (userRole === 'student') {
+        const content = submission.content;
+        const shouldShowSolutions = 
+            content.showSolutionAfter === 'immediate' || 
+            (content.showSolutionAfter === 'submission' && submission.status === 'graded');
+
+        // Add solutions to answers if appropriate
+        if (shouldShowSolutions && content.questions) {
+            responseSubmission.answers = responseSubmission.answers.map((answer, index) => {
+                const question = content.questions[index];
+                return {
+                    ...answer,
+                    correctAnswer: question.correctAnswer,
+                    explanation: question.explanation
+                };
+            });
+        }
+    }
+
     res.status(200).json({
         success: true,
-        submission
+        submission: responseSubmission
     });
 });
 
@@ -424,13 +465,32 @@ const retrySubmission = asyncHandler(async (req, res) => {
         }
     }
 
+    // Requirement 10.1, 10.2, 10.3, 10.4, 10.5: Solution display logic
+    const shouldShowSolutions = 
+        content.showSolutionAfter === 'immediate' || 
+        (content.showSolutionAfter === 'submission' && status === 'graded');
+
+    // Prepare response with conditional solution display
+    const responseAnswers = gradedAnswers.map((answer, index) => {
+        const question = content.questions[index];
+        const responseAnswer = { ...answer };
+
+        // Include solutions based on showSolutionAfter setting
+        if (shouldShowSolutions) {
+            responseAnswer.correctAnswer = question.correctAnswer;
+            responseAnswer.explanation = question.explanation;
+        }
+
+        return responseAnswer;
+    });
+
     res.status(201).json({
         success: true,
         submissionId: newSubmission._id,
         score: scorePercentage,
         isPassing,
         status,
-        answers: gradedAnswers,
+        answers: responseAnswers,
         attemptNumber: newSubmission.attemptNumber,
         timeSpent: timeSpentSeconds
     });

@@ -63,6 +63,8 @@ app.use('/api/courses', require('./routes/courseRoutes'));
 app.use('/api/courses', require('./routes/interactiveContentRoutes'));
 app.use('/api/submissions', require('./routes/submissionRoutes'));
 app.use('/api/grading', require('./routes/manualGradingQueueRoutes'));
+app.use('/api/analytics', require('./routes/analyticsRoutes'));
+app.use('/api/progress', require('./routes/progressRoutes'));
 app.use('/api/enrollment', require('./routes/enrollmentRoutes'));
 app.use('/api/university', require('./routes/universityRoutes'));
 app.use('/api/partner', require('./routes/partnerRoutes'));
