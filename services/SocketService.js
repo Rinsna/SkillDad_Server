@@ -11,12 +11,30 @@ class SocketService {
         this.io = socketIo(server, {
             cors: {
                 origin: function (origin, callback) {
-                    if (!origin || origin.endsWith('.vercel.app') || origin.startsWith('http://localhost:517')) {
+                    // Allow requests with no origin (mobile apps, server-to-server)
+                    if (!origin) {
                         return callback(null, true);
                     }
-                    return callback(null, process.env.CLIENT_URL === origin);
+                    
+                    // Allow Vercel deployments
+                    if (origin.endsWith('.vercel.app')) {
+                        return callback(null, true);
+                    }
+                    
+                    // Allow localhost and 127.0.0.1 on common ports
+                    if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
+                        return callback(null, true);
+                    }
+                    
+                    // Allow configured CLIENT_URL
+                    if (process.env.CLIENT_URL && origin === process.env.CLIENT_URL) {
+                        return callback(null, true);
+                    }
+                    
+                    return callback(new Error('CORS not allowed'));
                 },
-                methods: ['GET', 'POST']
+                methods: ['GET', 'POST'],
+                credentials: true
             }
         });
 
