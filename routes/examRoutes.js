@@ -156,6 +156,84 @@ router.get('/:id', protect, async (req, res) => {
     }
 });
 
+// @desc    Get question paper for an exam (only accessible when exam window is open)
+// @route   GET /api/exams/:id/question-paper
+// @access  Private (Student - time-gated)
+router.get('/:id/question-paper', protect, async (req, res) => {
+    try {
+        const exam = await Exam.findById(req.params.id)
+            .populate('linkedPaper')
+            .populate('course', 'title');
+
+        if (!exam) {
+            return res.status(404).json({ message: 'Exam not found' });
+        }
+
+        if (!exam.isPublished) {
+            return res.status(403).json({ message: 'This exam is not published yet' });
+        }
+
+        const now = new Date();
+        const scheduledDate = new Date(exam.scheduledDate);
+        const deadline = exam.deadline ? new Date(exam.deadline) : null;
+
+        // Allow university/admin to always access
+        const role = req.user.role?.toLowerCase();
+        if (role !== 'admin' && role !== 'university') {
+            // Students: strict time gate
+            if (now < scheduledDate) {
+                const minutesLeft = Math.round((scheduledDate - now) / 60000);
+                return res.status(403).json({
+                    message: `Exam has not started yet. Starts in ${minutesLeft} minute(s).`,
+                    availableAt: exam.scheduledDate
+                });
+            }
+            if (deadline && now > deadline) {
+                return res.status(403).json({
+                    message: 'Exam deadline has passed. Question paper is no longer accessible.',
+                    expiredAt: exam.deadline
+                });
+            }
+
+            // Verify student is enrolled in the course
+            const enrollment = await Enrollment.findOne({
+                student: req.user._id,
+                course: exam.course._id || exam.course,
+                status: 'active'
+            });
+            if (!enrollment) {
+                return res.status(403).json({ message: 'You are not enrolled in this course' });
+            }
+        }
+
+        if (!exam.linkedPaper) {
+            return res.status(404).json({ message: 'No question paper has been attached to this exam' });
+        }
+
+        const paper = exam.linkedPaper;
+        res.json({
+            examId: exam._id,
+            examTitle: exam.title,
+            course: exam.course?.title,
+            scheduledDate: exam.scheduledDate,
+            deadline: exam.deadline,
+            duration: exam.duration,
+            paper: {
+                _id: paper._id,
+                title: paper.title,
+                description: paper.description,
+                fileName: paper.fileName,
+                fileUrl: paper.fileUrl,
+                format: paper.format,
+                fileSize: paper.fileSize
+            }
+        });
+    } catch (error) {
+        console.error('[Question Paper Access]', error.message);
+        res.status(500).json({ message: error.message });
+    }
+});
+
 // @desc    Create new exam
 // @route   POST /api/exams
 // @access  Private (Instructor/Admin)
