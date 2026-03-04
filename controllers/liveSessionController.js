@@ -1174,6 +1174,7 @@ const getCourseLiveSessions = asyncHandler(async (req, res) => {
         })
             .populate('instructor', 'name email')
             .populate('university', 'name')
+            .populate('course', 'title')
             .sort({ startTime: 1 })
             .limit(10)
             .lean();
