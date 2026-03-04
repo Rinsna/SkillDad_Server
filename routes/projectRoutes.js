@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const Project = require('../models/projectModel');
 const ProjectSubmission = require('../models/projectSubmissionModel');
@@ -10,7 +11,11 @@ const socketService = require('../services/SocketService');
 // Configure multer for project file uploads
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        cb(null, 'uploads/projects/');
+        const dest = path.join(__dirname, '../uploads/projects/');
+        if (!fs.existsSync(dest)) {
+            fs.mkdirSync(dest, { recursive: true });
+        }
+        cb(null, dest);
     },
     filename: function (req, file, cb) {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);

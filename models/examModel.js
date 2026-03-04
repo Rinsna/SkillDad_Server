@@ -87,6 +87,10 @@ const examSchema = mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Document',
     },
+    answerKey: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Document',
+    },
     examMode: {
         type: String,
         enum: ['digital', 'paper-based'],

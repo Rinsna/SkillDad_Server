@@ -13,7 +13,19 @@ const jobScheduler = require('./jobs');
 const http = require('http');
 const socketService = require('./services/SocketService');
 
+const fs = require('fs');
+
 connectDB();
+
+// Ensure upload directories exist
+const uploadDirs = ['uploads', 'uploads/documents', 'uploads/projects'];
+uploadDirs.forEach(dir => {
+  const dirPath = path.join(__dirname, dir);
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+    console.log(`[Storage] Created directory: ${dirPath}`);
+  }
+});
 
 const app = express();
 app.use(cookieParser());

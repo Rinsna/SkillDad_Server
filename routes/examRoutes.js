@@ -45,6 +45,7 @@ router.get('/', protect, async (req, res) => {
             .populate('instructor', 'name email role profile')
             .populate('targetUniversity', 'name profile')
             .populate('linkedPaper')
+            .populate('answerKey')
             .sort({ scheduledDate: -1 });
 
         res.json(exams);
@@ -88,7 +89,8 @@ router.get('/my-exams', protect, async (req, res) => {
             isPublished: true
         }).populate('course', 'title')
             .populate('instructor', 'name')
-            .populate('linkedPaper');
+            .populate('linkedPaper')
+            .populate('answerKey');
 
         // Get student's submissions for these exams
         const submissions = await ExamSubmission.find({
@@ -163,6 +165,7 @@ router.get('/:id/question-paper', protect, async (req, res) => {
     try {
         const exam = await Exam.findById(req.params.id)
             .populate('linkedPaper')
+            .populate('answerKey')
             .populate('course', 'title');
 
         if (!exam) {

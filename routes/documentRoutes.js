@@ -2,13 +2,18 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const Document = require('../models/documentModel');
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        cb(null, 'uploads/documents/');
+        const dest = path.join(__dirname, '../uploads/documents/');
+        if (!fs.existsSync(dest)) {
+            fs.mkdirSync(dest, { recursive: true });
+        }
+        cb(null, dest);
     },
     filename: function (req, file, cb) {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -154,12 +159,19 @@ router.post('/upload', protect, upload.single('document'), async (req, res) => {
         });
 
         const savedDocument = await document.save();
-        await savedDocument.populate('student', 'name email');
-        await savedDocument.populate('course', 'title');
+
+        // Use try-catch for population to be more resilient
+        try {
+            await savedDocument.populate('student', 'name email');
+            await savedDocument.populate('course', 'title');
+        } catch (popError) {
+            console.error('[Document Upload] Population failed, but document was saved:', popError.message);
+        }
 
         res.status(201).json(savedDocument);
     } catch (error) {
-        res.status(400).json({ message: error.message });
+        console.error('[Document Upload] 500 Error:', error);
+        res.status(500).json({ message: error.message });
     }
 });
 

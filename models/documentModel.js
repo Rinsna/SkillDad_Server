@@ -13,7 +13,7 @@ const documentSchema = mongoose.Schema({
     },
     format: {
         type: String,
-        enum: ['PDF', 'DOC', 'DOCX', 'JPG', 'PNG', 'ZIP'],
+        enum: ['PDF', 'DOC', 'DOCX', 'JPG', 'JPEG', 'PNG', 'ZIP'],
         required: true,
     },
     maxSize: {
