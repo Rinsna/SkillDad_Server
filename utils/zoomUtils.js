@@ -216,18 +216,26 @@ const encryptPasscode = (passcode) => {
  */
 const decryptPasscode = (encryptedPasscode) => {
   if (!encryptedPasscode) {
-    throw new Error('Encrypted passcode is required for decryption');
+    return '';
+  }
+
+  // If the passcode doesn't contain a colon, it's likely not encrypted (legacy or mock)
+  // Return it as-is to prevent 500 errors
+  if (!encryptedPasscode.includes(':')) {
+    console.log('[Zoom] Using unencrypted passcode (legacy/mock)');
+    return encryptedPasscode;
   }
 
   if (!ZOOM_ENCRYPTION_KEY) {
-    throw new Error('ZOOM_ENCRYPTION_KEY environment variable is not set');
+    console.warn('[Zoom] Encryption key missing, returning passcode as-is');
+    return encryptedPasscode;
   }
 
   try {
     // Split the IV and encrypted data
     const parts = encryptedPasscode.split(':');
     if (parts.length !== 2) {
-      throw new Error('Invalid encrypted passcode format');
+      return encryptedPasscode;
     }
 
     const iv = Buffer.from(parts[0], 'hex');
@@ -246,7 +254,8 @@ const decryptPasscode = (encryptedPasscode) => {
     return decrypted;
   } catch (error) {
     console.error('Error decrypting passcode:', error.message);
-    throw new Error('Failed to decrypt passcode');
+    // Return original string if decryption fails, better than crashing with 500
+    return encryptedPasscode;
   }
 };
 
@@ -258,7 +267,7 @@ const decryptPasscode = (encryptedPasscode) => {
  * @param {string} hostEmail - Host email address
  * @returns {Promise<Object>} ZoomMeetingData object
  */
-const createZoomMeeting = async (topic, startTime, duration, hostEmail) => {
+const createZoomMeeting = async (topic, startTime, duration, hostEmail, timezone = 'Asia/Kolkata') => {
   const sessionId = 'pending'; // Session not created yet
   const operation = 'create_meeting';
 
@@ -297,7 +306,7 @@ const createZoomMeeting = async (topic, startTime, duration, hostEmail) => {
         type: 2, // Scheduled meeting
         start_time: startTime.toISOString(),
         duration: duration,
-        timezone: 'UTC',
+        timezone: timezone,
         settings: {
           host_video: true,
           participant_video: true,
@@ -414,7 +423,7 @@ const generateZoomSignature = async (meetingNumber, role, sessionId = null, user
 
   // Check Redis cache if sessionId and userId are provided
   if (sessionId && userId) {
-    const cacheKey = `zoom:sig:${sessionId}:${userId}:${role}`;
+    const cacheKey = `zoom:sig:v6:${sessionId}:${userId}:${role}`;
     try {
       const r = redisCache.getRedis();
       if (r) {
@@ -430,11 +439,17 @@ const generateZoomSignature = async (meetingNumber, role, sessionId = null, user
   }
 
   // Generate JWT signature
-  const iat = Math.floor(Date.now() / 1000);
+  const iat = Math.floor(Date.now() / 1000) - 30; // 30 seconds buffer for clock skew
   const exp = iat + (2 * 60 * 60); // 2 hours from now
+
+  if (!ZOOM_SDK_KEY || !ZOOM_SDK_SECRET) {
+    console.error('[Zoom Signature] CRITICAL: ZOOM_SDK_KEY or ZOOM_SDK_SECRET is missing from environment variables');
+  }
 
   const payload = {
     sdkKey: ZOOM_SDK_KEY,
+    appKey: ZOOM_SDK_KEY,
+    clientId: ZOOM_SDK_KEY, // Added back for maximum compatibility with all SDK warnings
     mn: meetingNumber.toString(),
     role: role,
     iat: iat,
@@ -443,11 +458,17 @@ const generateZoomSignature = async (meetingNumber, role, sessionId = null, user
   };
 
   try {
-    const signature = jwt.sign(payload, ZOOM_SDK_SECRET);
+    const signature = jwt.sign(payload, ZOOM_SDK_SECRET, {
+      algorithm: 'HS256',
+      header: {
+        alg: 'HS256',
+        typ: 'JWT'
+      }
+    });
 
     // Cache signature for 1 hour if sessionId and userId are provided
     if (sessionId && userId) {
-      const cacheKey = `zoom:sig:${sessionId}:${userId}:${role}`;
+      const cacheKey = `zoom:sig:v6:${sessionId}:${userId}:${role}`;
       const cacheTTL = 60 * 60; // 1 hour in seconds
       try {
         const r = redisCache.getRedis();

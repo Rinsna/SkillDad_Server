@@ -1,0 +1,15 @@
+[dotenv@17.3.1] injecting env (40) from .env -- tip: ???? prevent building .env in docker: https://dotenvx.com/prebuild
+Connected to DB
+Session Topic: Mastering advanced react patterns
+Zoom Data: {
+  "meetingId": "6164853310",
+  "meetingNumber": 6164853310,
+  "passcode": "M8VXAG",
+  "joinUrl": "https://zoom.us/j/6164853310?pwd=M8VXAG",
+  "startUrl": "https://zoom.us/s/6164853310?zak=mock_zak_token",
+  "hostEmail": "sarah.wilson@university.edu",
+  "createdAt": "2026-03-02T05:32:58.423Z"
+}
+Passcode in DB: M8VXAG
+Parts length: 1
+Passcode is NOT in iv:encryptedData format

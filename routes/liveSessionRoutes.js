@@ -17,6 +17,7 @@ const {
     getZoomSDKConfig,
     trackSessionJoin,
     trackSessionLeave,
+    getCourseLiveSessions,
 } = require('../controllers/liveSessionController');
 
 const { protect, authorize } = require('../middleware/authMiddleware');
@@ -160,6 +161,14 @@ router.post(
     protect,
     authorize('university', 'admin', 'student'),
     trackSessionLeave
+);
+
+/* ── Get live sessions for a course ────────────────────────── */
+router.get(
+    '/course/:courseId',
+    protect,
+    authorize('university', 'admin', 'student'),
+    getCourseLiveSessions
 );
 
 module.exports = router;

@@ -1,0 +1,54 @@
+﻿[dotenv@17.3.1] injecting env (40) from .env -- tip: ΓÜÖ∩╕Å  enable debug logging with { debug: true }
+Connected to MongoDB
+
+--- LAST 10 SESSIONS ---
+
+Topic: intro
+Original startTime (DB): 2026-03-04T04:39:06.315Z
+Reported Timezone: Asia/Kolkata
+Created At: 2026-03-04T04:38:11.899Z
+
+Topic: Mastering advanced react patterns
+Original startTime (DB): 2026-03-04T04:31:20.435Z
+Reported Timezone: Asia/Kolkata
+Created At: 2026-03-04T04:30:10.044Z
+
+Topic: Mastering advanced react patterns
+Original startTime (DB): 2026-03-04T04:15:07.475Z
+Reported Timezone: Asia/Kolkata
+Created At: 2026-03-04T04:14:03.464Z
+
+Topic: mastering
+Original startTime (DB): 2026-03-04T04:08:07.119Z
+Reported Timezone: Asia/Kolkata
+Created At: 2026-03-04T04:08:03.334Z
+
+Topic: Mastering advanced react patterns
+Original startTime (DB): 2026-03-04T03:39:21.360Z
+Reported Timezone: Asia/Kolkata
+Created At: 2026-03-04T03:38:59.149Z
+
+Topic: Mastering advanced react patterns
+Original startTime (DB): 2026-03-03T05:44:05.402Z
+Reported Timezone: Asia/Kolkata
+Created At: 2026-03-03T05:43:48.788Z
+
+Topic: mastering react
+Original startTime (DB): 2026-03-02T15:42:01.342Z
+Reported Timezone: Asia/Kolkata
+Created At: 2026-03-02T15:37:00.298Z
+
+Topic: javascript1
+Original startTime (DB): 2026-03-02T10:45:40.873Z
+Reported Timezone: Asia/Kolkata
+Created At: 2026-03-02T10:45:35.617Z
+
+Topic: jhmgh
+Original startTime (DB): 2026-03-02T09:05:22.929Z
+Reported Timezone: Asia/Kolkata
+Created At: 2026-03-02T08:56:26.650Z
+
+Topic: Introduction javascript  part1
+Original startTime (DB): 2026-03-02T09:18:22.579Z
+Reported Timezone: Asia/Kolkata
+Created At: 2026-03-02T08:44:49.552Z
