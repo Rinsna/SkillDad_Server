@@ -39,13 +39,35 @@ router.get('/directors', async (req, res) => {
 // @access  Public
 router.get('/universities', async (req, res) => {
     try {
-        const universities = await User.find({ 
+        const Course = require('../models/courseModel');
+        const universities = await User.find({
             role: 'university',
             isVerified: true  // Only fetch admin-approved universities
         })
-            .select('name email profile')
+            .select('name email profile profileImage bio')
             .sort({ 'profile.universityName': 1, name: 1 });
-        res.json(universities || []);
+
+        // Enrich with counts
+        const enrichedUnis = await Promise.all(universities.map(async (uni) => {
+            const studentCount = await User.countDocuments({
+                $or: [
+                    { universityId: uni._id },
+                    { registeredBy: uni._id }
+                ]
+            });
+
+            const courseCount = await Course.countDocuments({
+                instructor: uni._id
+            });
+
+            return {
+                ...uni.toObject(),
+                studentCount,
+                courseCount
+            };
+        }));
+
+        res.json(enrichedUnis || []);
     } catch (error) {
         console.error('Error fetching universities:', error.message);
         res.status(500).json({ message: error.message });

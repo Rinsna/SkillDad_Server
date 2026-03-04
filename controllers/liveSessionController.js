@@ -344,6 +344,7 @@ const getSessions = asyncHandler(async (req, res) => {
         .skip(skip)
         .limit(parseInt(limit))
         .populate('instructor', 'name email profileImage profile')
+        .populate('course', 'title')
         .lean();
 
     // Metrics are included for university and admin users (Requirement 12.5)
