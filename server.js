@@ -17,15 +17,23 @@ const fs = require('fs');
 
 connectDB();
 
+// Registry of upload paths
+const uploads = {
+  ROOT: path.join(__dirname, 'uploads'),
+  DOCS: path.join(__dirname, 'uploads/documents'),
+  PROJECTS: path.join(__dirname, 'uploads/projects')
+};
+
 // Ensure upload directories exist
-const uploadDirs = ['uploads', 'uploads/documents', 'uploads/projects'];
-uploadDirs.forEach(dir => {
-  const dirPath = path.join(__dirname, dir);
+Object.values(uploads).forEach(dirPath => {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
-    console.log(`[Storage] Created directory: ${dirPath}`);
+    console.log(`[Storage] Verified/Created: ${dirPath}`);
   }
 });
+
+// Expose root path for routes to use consistently
+global.BASE_UPLOAD_PATH = uploads.ROOT;
 
 const app = express();
 app.use(cookieParser());

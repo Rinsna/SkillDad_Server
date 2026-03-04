@@ -152,7 +152,7 @@ router.post('/upload', protect, upload.single('document'), async (req, res) => {
             recipientUniversity: recipientUniversity || null,
             uploadedBy: req.user._id,
             fileName: req.file.originalname,
-            fileUrl: req.file.path.replace(/\\/g, '/'), // normalize to forward slashes for URL
+            fileUrl: `uploads/documents/${req.file.filename}`, // clean relative URL for frontend
             fileSize: req.file.size,
             format: path.extname(req.file.originalname).substring(1).toUpperCase(),
             status: 'submitted'

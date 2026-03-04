@@ -199,7 +199,7 @@ router.post('/:id/submit', protect, upload.array('files', 10), async (req, res) 
 
         const files = req.files ? req.files.map(file => ({
             fileName: file.originalname,
-            fileUrl: file.path,
+            fileUrl: `uploads/projects/${file.filename}`, // relative URL
             fileSize: file.size
         })) : [];
 
