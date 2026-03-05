@@ -234,4 +234,4 @@ paymentSessionSchema.statics.getStatistics = async function () {
 paymentSessionSchema.set('toJSON', { virtuals: true });
 paymentSessionSchema.set('toObject', { virtuals: true });
 
-module.exports = mongoose.model('PaymentSession', paymentSessionSchema);
+module.exports = mongoose.models.PaymentSession || mongoose.model('PaymentSession', paymentSessionSchema);

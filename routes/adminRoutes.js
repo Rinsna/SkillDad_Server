@@ -33,16 +33,24 @@ const {
 const { protect } = require('../middleware/authMiddleware');
 
 const checkAdmin = (req, res, next) => {
-    const fs = require('fs');
-    const path = require('path');
-    const log = `[${new Date().toISOString()}] ADMIN CHECK - User: ${req.user ? req.user.email : 'UNDEFINED'}, Role: ${req.user ? req.user.role : 'N/A'}, URL: ${req.originalUrl}\n`;
-    fs.appendFileSync(path.join(__dirname, '../debug_admin.log'), log);
+    try {
+        const fs = require('fs');
+        const path = require('path');
+        const log = `[${new Date().toISOString()}] ADMIN CHECK - User: ${req.user ? req.user.email : 'UNDEFINED'}, Role: ${req.user ? req.user.role : 'N/A'}, URL: ${req.originalUrl}\n`;
+
+        try {
+            fs.appendFileSync(path.join(__dirname, '../debug_admin.log'), log);
+        } catch (logErr) {
+            // Silently ignore if logging fails (e.g. read-only filesystem)
+            console.warn('[AdminCheck] Could not write to debug_admin.log:', logErr.message);
+        }
+    } catch (err) {
+        console.error('[AdminCheck] Internal Error:', err);
+    }
 
     if (req.user && req.user.role?.toLowerCase() === 'admin') {
         next();
     } else {
-        const denyLog = `[${new Date().toISOString()}] ADMIN DENIED - User ${req.user ? req.user.email : 'Unknown'} with role ${req.user ? req.user.role : 'None'} attempted to access ${req.originalUrl}\n`;
-        fs.appendFileSync(path.join(__dirname, '../debug_admin.log'), denyLog);
         return res.status(403).json({ message: 'Not authorized as an Admin [checkAdmin]' });
     }
 };
@@ -87,7 +95,7 @@ router.post('/partner-logos/seed', protect, checkAdmin, async (req, res) => {
     // One-time seed endpoint for partner logos
     try {
         const PartnerLogo = require('../models/partnerLogoModel');
-        
+
         const samplePartners = [
             { name: 'TechCorp Solutions', logo: '/assets/logos/techcorp.png', type: 'corporate', order: 1, isActive: true },
             { name: 'Global Innovations Ltd', logo: '/assets/logos/global-innovations.png', type: 'corporate', order: 2, isActive: true },
@@ -99,13 +107,13 @@ router.post('/partner-logos/seed', protect, checkAdmin, async (req, res) => {
             { name: 'Smart Solutions International', logo: '/assets/logos/smart-solutions.png', type: 'corporate', order: 8, isActive: true },
             { name: 'Innovate Labs', logo: '/assets/logos/innovate-labs.png', type: 'corporate', order: 9, isActive: true }
         ];
-        
+
         // Clear existing (optional)
         await PartnerLogo.deleteMany({});
-        
+
         // Insert sample partners
         const inserted = await PartnerLogo.insertMany(samplePartners);
-        
+
         res.json({
             success: true,
             message: `Successfully seeded ${inserted.length} partner logos`,

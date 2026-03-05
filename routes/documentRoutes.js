@@ -7,29 +7,45 @@ const { protect, authorize } = require('../middleware/authMiddleware');
 const Document = require('../models/documentModel');
 
 // Configure multer for file uploads
+// Configure multer for file uploads with robust path handling
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        const dest = path.join(__dirname, '../uploads/documents/');
-        if (!fs.existsSync(dest)) {
-            fs.mkdirSync(dest, { recursive: true });
+        try {
+            // Use path.resolve to ensure we have an absolute path from the server root
+            const serverRoot = path.resolve(__dirname, '..');
+            const dest = path.join(serverRoot, 'uploads', 'documents');
+
+            if (!fs.existsSync(dest)) {
+                fs.mkdirSync(dest, { recursive: true });
+                console.log(`[Multer] Created destination directory: ${dest}`);
+            }
+            cb(null, dest);
+        } catch (err) {
+            console.error('[Multer] Destination error:', err.message);
+            cb(err);
         }
-        cb(null, dest);
     },
     filename: function (req, file, cb) {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+        const exit = path.extname(file.originalname);
+        cb(null, `${file.fieldname}-${uniqueSuffix}${exit}`);
     }
 });
 
 const fileFilter = (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|pdf|doc|docx|zip|rar/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
+    // Robust check for both common extensions and mimetypes
+    const allowedExts = /jpeg|jpg|png|pdf|doc|docx|zip|rar|txt/;
+    const allowedMimeKeywords = /jpeg|jpg|png|pdf|word|office|zip|octet-stream|text/;
 
-    if (mimetype && extname) {
+    const extName = allowedExts.test(path.extname(file.originalname).toLowerCase());
+    const mimeType = allowedMimeKeywords.test(file.mimetype.toLowerCase()) || file.mimetype.startsWith('application/');
+
+    if (extName) {
+        // If extension is allowed, we're generally safe, but verify mimetype isn't something totally alien
         return cb(null, true);
     } else {
-        cb(new Error('Invalid file type'));
+        console.warn(`[Multer] Rejecting file: ${file.originalname} (${file.mimetype})`);
+        cb(new Error('File type not supported. Use PDF, DOC, DOCX, JPG, PNG, ZIP, RAR, or TXT.'));
     }
 };
 
@@ -137,41 +153,86 @@ router.get('/:id', protect, async (req, res) => {
 // @access  Private
 router.post('/upload', protect, upload.single('document'), async (req, res) => {
     try {
+        console.log(`[Document Upload] Hit by ${req.user.email} (${req.user.role})`);
+
         if (!req.file) {
-            return res.status(400).json({ message: 'No file uploaded' });
+            console.warn('[Document Upload] No file in request');
+            return res.status(400).json({ message: 'No file uploaded or file filter rejected it' });
         }
 
         const { title, description, type, course, student, recipientUniversity } = req.body;
+        console.log('[Document Upload] Body data:', { title, type, course, student });
 
-        const document = new Document({
-            title,
-            description,
-            type,
-            course: course || null,
-            student: student || (req.user.role === 'student' ? req.user._id : null),
-            recipientUniversity: recipientUniversity || null,
+        // Build the document object
+        const docData = {
+            title: title || req.file.originalname,
+            description: description || 'No description provided',
+            type: type || 'other',
             uploadedBy: req.user._id,
             fileName: req.file.originalname,
-            fileUrl: `uploads/documents/${req.file.filename}`, // clean relative URL for frontend
+            fileUrl: `uploads/documents/${req.file.filename}`,
             fileSize: req.file.size,
-            format: path.extname(req.file.originalname).substring(1).toUpperCase(),
             status: 'submitted'
-        });
+        };
 
+        // Handle optional and role-based fields
+        if (course && course !== '' && course !== 'undefined') {
+            docData.course = course;
+        }
+
+        if (student && student !== '' && student !== 'undefined') {
+            docData.student = student;
+        } else if (req.user.role === 'student') {
+            docData.student = req.user._id;
+        }
+
+        if (recipientUniversity && recipientUniversity !== '' && recipientUniversity !== 'undefined') {
+            docData.recipientUniversity = recipientUniversity;
+        }
+
+        // Set university field for university role uploads
+        if (req.user.role === 'university') {
+            docData.university = req.user._id;
+        } else if (req.user.role === 'admin' && (recipientUniversity || course)) {
+            // Admin can assign it to a university or keep it general
+            if (recipientUniversity) docData.university = recipientUniversity;
+        }
+
+        // Set format safely based on model enum
+        const rawExt = path.extname(req.file.originalname);
+        let format = 'PDF'; // Default fallback
+        if (rawExt) {
+            const ext = rawExt.substring(1).toUpperCase();
+            // Match the enum: ['PDF', 'DOC', 'DOCX', 'JPG', 'JPEG', 'PNG', 'ZIP', 'RAR', 'TXT']
+            const modelEnum = ['PDF', 'DOC', 'DOCX', 'JPG', 'JPEG', 'PNG', 'ZIP', 'RAR', 'TXT'];
+            if (modelEnum.includes(ext)) {
+                format = ext;
+            } else if (ext === 'JPG') {
+                format = 'JPG';
+            }
+        }
+        docData.format = format;
+
+        const document = new Document(docData);
         const savedDocument = await document.save();
+        console.log('[Document Upload] Saved successfully:', savedDocument._id);
 
-        // Use try-catch for population to be more resilient
+        // Populate details for response if possible (non-blocking for UI success)
         try {
-            await savedDocument.populate('student', 'name email');
-            await savedDocument.populate('course', 'title');
+            if (savedDocument.student) await savedDocument.populate('student', 'name email');
+            if (savedDocument.course) await savedDocument.populate('course', 'title');
         } catch (popError) {
-            console.error('[Document Upload] Population failed, but document was saved:', popError.message);
+            console.error('[Document Upload] Population failed (ignoring):', popError.message);
         }
 
         res.status(201).json(savedDocument);
     } catch (error) {
-        console.error('[Document Upload] 500 Error:', error);
-        res.status(500).json({ message: error.message });
+        console.error('[Document Upload] 500 CRITICAL Error:', error);
+        res.status(500).json({
+            message: 'Server failed to process document upload',
+            error: error.message,
+            stack: process.env.NODE_ENV === 'production' ? null : error.stack
+        });
     }
 });
 

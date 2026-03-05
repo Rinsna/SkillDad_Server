@@ -72,6 +72,6 @@ auditLogSchema.index({ transactionId: 1, timestamp: -1 });
 // 7 years = 7 * 365 * 24 * 60 * 60 seconds = 220752000 seconds
 auditLogSchema.index({ timestamp: 1 }, { expireAfterSeconds: 220752000 });
 
-const AuditLog = mongoose.model('AuditLog', auditLogSchema);
+const AuditLog = mongoose.models.PaymentAuditLog || mongoose.model('PaymentAuditLog', auditLogSchema);
 
 module.exports = AuditLog;

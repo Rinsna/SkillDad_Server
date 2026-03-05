@@ -259,6 +259,66 @@ const templates = {
             text: 'Download Certificate',
             url: getClientUrl(certUrl)
         });
+    },
+
+    examReminder: (name, examTitle, courseTitle, startTime, duration) => {
+        const content = `
+            <p style="${baseStyle.p}">Hello <strong>${name}</strong>,</p>
+            <p style="${baseStyle.p}">This is a reminder that your exam is starting in <strong>30 minutes</strong>.</p>
+            <div style="${baseStyle.highlight}">
+                <p style="margin: 0 0 4px 0;"><strong style="color: #7C3AED;">Exam:</strong> ${examTitle}</p>
+                <p style="margin: 0 0 4px 0;"><strong style="color: #7C3AED;">Course:</strong> ${courseTitle}</p>
+                <p style="margin: 0 0 4px 0;"><strong style="color: #7C3AED;">Start Time:</strong> ${new Date(startTime).toLocaleString('en-IN', { dateStyle: 'long', timeStyle: 'short' })}</p>
+                <p style="margin: 0;"><strong style="color: #7C3AED;">Duration:</strong> ${duration} minutes</p>
+            </div>
+            <div style="background-color: #FEF3C7; border-left: 4px solid #F59E0B; padding: 16px; margin: 24px 0; border-radius: 8px;">
+                <p style="margin: 0; font-size: 14px; color: #92400E;"><strong>⏰ Important:</strong><br/>Make sure you're ready to start the exam on time. Late access may not be permitted.</p>
+            </div>
+            <p style="${baseStyle.p}">Ensure you have a stable internet connection and all necessary materials ready.</p>
+        `;
+        return layout('Exam Starting Soon!', content, {
+            text: 'Go to Exam Portal',
+            url: getClientUrl('/dashboard/exams')
+        });
+    },
+
+    examCancelled: (name, examTitle, courseTitle, reason) => {
+        const content = `
+            <p style="${baseStyle.p}">Hello <strong>${name}</strong>,</p>
+            <p style="${baseStyle.p}">We regret to inform you that the following exam has been cancelled:</p>
+            <div style="${baseStyle.highlight}">
+                <p style="margin: 0 0 4px 0;"><strong style="color: #7C3AED;">Exam:</strong> ${examTitle}</p>
+                <p style="margin: 0 0 8px 0;"><strong style="color: #7C3AED;">Course:</strong> ${courseTitle}</p>
+                ${reason ? `<p style="margin: 8px 0 0 0; font-size: 14px; color: #6B7280; border-top: 1px solid #E5E7EB; padding-top: 8px;"><strong>Reason:</strong> ${reason}</p>` : ''}
+            </div>
+            <p style="${baseStyle.p}">You will be notified when a new exam is scheduled. We apologize for any inconvenience.</p>
+        `;
+        return layout('Exam Cancelled', content, {
+            text: 'View My Exams',
+            url: getClientUrl('/dashboard/exams')
+        });
+    },
+
+    submissionConfirmation: (name, examTitle, submittedAt, isAutoSubmitted) => {
+        const submissionType = isAutoSubmitted ? 'automatically submitted' : 'successfully submitted';
+        const content = `
+            <p style="${baseStyle.p}">Hello <strong>${name}</strong>,</p>
+            <p style="${baseStyle.p}">Your exam has been <strong>${submissionType}</strong>.</p>
+            <div style="${baseStyle.highlight}">
+                <p style="margin: 0 0 4px 0;"><strong style="color: #7C3AED;">Exam:</strong> ${examTitle}</p>
+                <p style="margin: 0;"><strong style="color: #7C3AED;">Submission Time:</strong> ${new Date(submittedAt).toLocaleString('en-IN', { dateStyle: 'long', timeStyle: 'short' })}</p>
+            </div>
+            ${isAutoSubmitted ? `
+                <div style="background-color: #DBEAFE; border-left: 4px solid #3B82F6; padding: 16px; margin: 24px 0; border-radius: 8px;">
+                    <p style="margin: 0; font-size: 14px; color: #1E40AF;"><strong>ℹ️ Note:</strong><br/>Your exam was automatically submitted when the time expired. All your answers have been saved.</p>
+                </div>
+            ` : ''}
+            <p style="${baseStyle.p}">Your submission has been recorded. You will be notified when the results are published.</p>
+        `;
+        return layout('Exam Submission Confirmed', content, {
+            text: 'View My Submissions',
+            url: getClientUrl('/dashboard/exams')
+        });
     }
 };
 

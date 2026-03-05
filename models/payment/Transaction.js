@@ -324,4 +324,4 @@ transactionSchema.virtual('gstAmountFormatted').get(function () {
 transactionSchema.set('toJSON', { virtuals: true });
 transactionSchema.set('toObject', { virtuals: true });
 
-module.exports = mongoose.model('Transaction', transactionSchema);
+module.exports = mongoose.models.Transaction || mongoose.model('Transaction', transactionSchema);

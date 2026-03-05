@@ -419,4 +419,4 @@ reconciliationSchema.statics.getStatistics = async function (startDate, endDate)
 reconciliationSchema.set('toJSON', { virtuals: true });
 reconciliationSchema.set('toObject', { virtuals: true });
 
-module.exports = mongoose.model('Reconciliation', reconciliationSchema);
+module.exports = mongoose.models.Reconciliation || mongoose.model('Reconciliation', reconciliationSchema);

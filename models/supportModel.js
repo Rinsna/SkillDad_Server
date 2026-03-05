@@ -34,4 +34,4 @@ const supportSchema = mongoose.Schema({
     timestamps: true,
 });
 
-module.exports = mongoose.model('Support', supportSchema);
+module.exports = mongoose.models.Support || mongoose.model('Support', supportSchema);

@@ -159,5 +159,5 @@ liveSessionSchema.virtual('isCurrentlyLive').get(function () {
     return this.status === 'live';
 });
 
-const LiveSession = mongoose.model('LiveSession', liveSessionSchema);
+const LiveSession = mongoose.models.LiveSession || mongoose.model('LiveSession', liveSessionSchema);
 module.exports = LiveSession;

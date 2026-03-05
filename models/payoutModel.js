@@ -33,6 +33,6 @@ const payoutSchema = mongoose.Schema({
     timestamps: true,
 });
 
-const Payout = mongoose.model('Payout', payoutSchema);
+const Payout = mongoose.models.Payout || mongoose.model('Payout', payoutSchema);
 
 module.exports = Payout;

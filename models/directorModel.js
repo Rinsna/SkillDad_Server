@@ -27,6 +27,6 @@ const directorSchema = new mongoose.Schema({
     timestamps: true
 });
 
-const Director = mongoose.model('Director', directorSchema);
+const Director = mongoose.models.Director || mongoose.model('Director', directorSchema);
 
 module.exports = Director;

@@ -8,18 +8,26 @@ const Project = require('../models/projectModel');
 const ProjectSubmission = require('../models/projectSubmissionModel');
 const socketService = require('../services/SocketService');
 
-// Configure multer for project file uploads
+// Configure multer for project file uploads with absolute path resolution
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        const dest = path.join(__dirname, '../uploads/projects/');
-        if (!fs.existsSync(dest)) {
-            fs.mkdirSync(dest, { recursive: true });
+        try {
+            const serverRoot = path.resolve(__dirname, '..');
+            const dest = path.join(serverRoot, 'uploads', 'projects');
+
+            if (!fs.existsSync(dest)) {
+                fs.mkdirSync(dest, { recursive: true });
+                console.log(`[Project Storage] Created directory: ${dest}`);
+            }
+            cb(null, dest);
+        } catch (err) {
+            console.error('[Project Storage] Destination error:', err.message);
+            cb(err);
         }
-        cb(null, dest);
     },
     filename: function (req, file, cb) {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+        cb(null, `${file.fieldname}-${uniqueSuffix}${path.extname(file.originalname)}`);
     }
 });
 
@@ -180,14 +188,16 @@ router.post('/', protect, authorize('university', 'admin'), async (req, res) => 
 // @access  Private (Student)
 router.post('/:id/submit', protect, upload.array('files', 10), async (req, res) => {
     try {
-        const project = await Project.findById(req.params.id);
+        console.log(`[Project Submit] User: ${req.user.email}, Project ID: ${req.params.id}`);
 
+        const project = await Project.findById(req.params.id);
         if (!project) {
             return res.status(404).json({ message: 'Project not found' });
         }
 
         // Check if deadline has passed
         if (new Date() > project.deadline) {
+            console.warn(`[Project Submit] Submission after deadline for ${req.user.email}`);
             return res.status(400).json({ message: 'Project deadline has passed' });
         }
 
@@ -204,14 +214,14 @@ router.post('/:id/submit', protect, upload.array('files', 10), async (req, res) 
         })) : [];
 
         if (submission) {
-            // Update existing submission
+            console.log(`[Project Submit] Updating existing submission ${submission._id}`);
             submission.files = files;
             submission.submissionText = req.body.submissionText || '';
             submission.status = 'submitted';
             submission.submittedAt = new Date();
             submission.isLate = new Date() > project.deadline;
         } else {
-            // Create new submission
+            console.log(`[Project Submit] Creating new submission`);
             submission = new ProjectSubmission({
                 project: project._id,
                 student: req.user._id,
@@ -224,26 +234,34 @@ router.post('/:id/submit', protect, upload.array('files', 10), async (req, res) 
         }
 
         const savedSubmission = await submission.save();
-        await savedSubmission.populate('project', 'title');
 
-        // Real-time: Notify instructor
-        if (project.instructor) {
-            socketService.sendToUser(
-                project.instructor,
-                'notification',
-                {
-                    type: 'project_submission',
-                    title: 'New Project Submission',
-                    message: `${req.user.name} has submitted "${project.title}".`,
-                    projectId: project._id,
-                    submissionId: savedSubmission._id
-                }
-            );
+        // Populate and notify in non-blocking way
+        try {
+            await savedSubmission.populate('project', 'title');
+            if (project.instructor) {
+                socketService.sendToUser(
+                    project.instructor,
+                    'notification',
+                    {
+                        type: 'project_submission',
+                        title: 'New Project Submission',
+                        message: `${req.user.name} has submitted "${project.title}".`,
+                        projectId: project._id,
+                        submissionId: savedSubmission._id
+                    }
+                );
+            }
+        } catch (postSaveErr) {
+            console.error('[Project Submit] Post-save background error:', postSaveErr.message);
         }
 
         res.status(201).json(savedSubmission);
     } catch (error) {
-        res.status(400).json({ message: error.message });
+        console.error('[Project Submit] 500 Error:', error);
+        res.status(500).json({
+            message: 'Server error during project submission',
+            error: error.message
+        });
     }
 });
 

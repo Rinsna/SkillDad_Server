@@ -25,6 +25,12 @@ const examSubmissionSchema = mongoose.Schema({
         required: true,
     },
     answers: [answerSchema],
+
+    // Answer sheet for PDF-based exams
+    answerSheetUrl: {
+        type: String,
+    },
+
     startTime: {
         type: Date,
         required: true,
@@ -65,6 +71,6 @@ const examSubmissionSchema = mongoose.Schema({
 // Compound index for efficient queries
 examSubmissionSchema.index({ exam: 1, student: 1, attemptNumber: 1 });
 
-const ExamSubmission = mongoose.model('ExamSubmission', examSubmissionSchema);
+const ExamSubmission = mongoose.models.ExamSubmission || mongoose.model('ExamSubmission', examSubmissionSchema);
 
 module.exports = ExamSubmission;

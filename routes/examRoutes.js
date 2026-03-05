@@ -10,6 +10,207 @@ const notificationService = require('../services/NotificationService');
 const socketService = require('../services/SocketService');
 const emailTemplates = require('../utils/emailTemplates');
 const sendEmail = require('../utils/sendEmail');
+const examController = require('../controllers/examController');
+const examSubmissionController = require('../controllers/examSubmissionController');
+const { uploadQuestionPaper, uploadAnswerSheet, handleUploadError } = require('../middleware/examUploadMiddleware');
+
+// ============================================
+// ADMIN EXAM MANAGEMENT ROUTES (NEW)
+// ============================================
+
+// @desc    Schedule a new exam
+// @route   POST /api/exams/admin/schedule
+// @access  Private (Admin)
+router.post(
+    '/admin/schedule',
+    protect,
+    authorize('admin'),
+    examController.scheduleExam
+);
+
+// @desc    Update exam details
+// @route   PUT /api/exams/admin/:examId
+// @access  Private (Admin)
+router.put(
+    '/admin/:examId',
+    protect,
+    authorize('admin'),
+    examController.updateExam
+);
+
+// @desc    Delete exam and all associated resources
+// @route   DELETE /api/exams/admin/:examId
+// @access  Private (Admin)
+router.delete(
+    '/admin/:examId',
+    protect,
+    authorize('admin'),
+    examController.deleteExam
+);
+
+// @desc    Get all exams with filtering and pagination
+// @route   GET /api/exams/admin/all
+// @access  Private (Admin)
+router.get(
+    '/admin/all',
+    protect,
+    authorize('admin'),
+    examController.getAllExams
+);
+
+
+// ============================================
+// STUDENT EXAM ACCESS ROUTES
+// ============================================
+
+// @desc    Get exams for courses student is enrolled in
+// @route   GET /api/exams/student/my-exams
+// @access  Private (Student)
+router.get(
+    '/student/my-exams',
+    protect,
+    authorize('student'),
+    examController.getStudentExams
+);
+
+// @desc    Check if student can access exam
+// @route   GET /api/exams/:examId/access
+// @access  Private (Student)
+router.get(
+    '/:examId/access',
+    protect,
+    authorize('student'),
+    examController.checkExamAccessController
+);
+
+// @desc    Start exam for student
+// @route   POST /api/exams/:examId/start
+// @access  Private (Student)
+router.post(
+    '/:examId/start',
+    protect,
+    authorize('student'),
+    examController.startExam
+);
+
+// ============================================
+// FILE UPLOAD ROUTES
+// ============================================
+
+// @desc    Upload question paper for exam
+// @route   POST /api/exams/:examId/question-paper
+// @access  Private (University/Admin)
+router.post(
+    '/:examId/question-paper',
+    protect,
+    authorize('university', 'admin'),
+    uploadQuestionPaper,
+    handleUploadError,
+    examController.uploadQuestionPaper
+);
+
+// @desc    Get secure download URL for question paper
+// @route   GET /api/exams/:examId/question-paper/download
+// @access  Private
+router.get(
+    '/:examId/question-paper/download',
+    protect,
+    examController.getQuestionPaperDownloadUrl
+);
+
+// @desc    Upload answer sheet for submission
+// @route   POST /api/exams/:examId/submissions/:submissionId/answer-sheet
+// @access  Private (Student)
+router.post(
+    '/:examId/submissions/:submissionId/answer-sheet',
+    protect,
+    uploadAnswerSheet,
+    handleUploadError,
+    examController.uploadAnswerSheet
+);
+
+// @desc    Get secure download URL for answer sheet
+// @route   GET /api/exams/:examId/submissions/:submissionId/answer-sheet/download
+// @access  Private
+router.get(
+    '/:examId/submissions/:submissionId/answer-sheet/download',
+    protect,
+    examController.getAnswerSheetDownloadUrl
+);
+
+// @desc    Delete all files for an exam
+// @route   DELETE /api/exams/:examId/files
+// @access  Private (Admin)
+router.delete(
+    '/:examId/files',
+    protect,
+    authorize('admin'),
+    examController.deleteExamFiles
+);
+
+// ============================================
+// EXAM SUBMISSION ROUTES (NEW)
+// ============================================
+
+// @desc    Submit answer for a question during exam (auto-save)
+// @route   POST /api/exam-submissions/:submissionId/answer
+// @access  Private (Student)
+router.post(
+    '/exam-submissions/:submissionId/answer',
+    protect,
+    authorize('student'),
+    examSubmissionController.submitAnswer
+);
+
+// @desc    Upload answer sheet for PDF-based exam
+// @route   POST /api/exam-submissions/:submissionId/answer-sheet
+// @access  Private (Student)
+router.post(
+    '/exam-submissions/:submissionId/answer-sheet',
+    protect,
+    authorize('student'),
+    uploadAnswerSheet,
+    handleUploadError,
+    examSubmissionController.uploadAnswerSheet
+);
+
+// @desc    Submit exam (finalize submission)
+// @route   POST /api/exam-submissions/:submissionId/submit
+// @access  Private (Student)
+router.post(
+    '/exam-submissions/:submissionId/submit',
+    protect,
+    authorize('student'),
+    examSubmissionController.submitExam
+);
+
+// @desc    Get my submission for an exam
+// @route   GET /api/exam-submissions/exam/:examId/my-submission
+// @access  Private (Student)
+router.get(
+    '/exam-submissions/exam/:examId/my-submission',
+    protect,
+    authorize('student'),
+    examSubmissionController.getMySubmission
+);
+
+// ============================================
+// AUTO-GRADING ROUTES
+// ============================================
+
+// @desc    Auto-grade all MCQ submissions for an exam
+// @route   POST /api/exams/:examId/auto-grade
+// @access  Private (University/Admin)
+router.post(
+    '/:examId/auto-grade',
+    protect,
+    authorize('university', 'admin'),
+    examController.autoGradeExam
+);
+
+// ============================================
+// EXISTING EXAM ROUTES
+// ============================================
 
 // @desc    Get all exams (Admin sees all, University sees their own/assigned)
 // @route   GET /api/exams

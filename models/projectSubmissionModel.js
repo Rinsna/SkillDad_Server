@@ -64,6 +64,6 @@ const projectSubmissionSchema = mongoose.Schema({
 // Compound index for efficient queries
 projectSubmissionSchema.index({ project: 1, student: 1 });
 
-const ProjectSubmission = mongoose.model('ProjectSubmission', projectSubmissionSchema);
+const ProjectSubmission = mongoose.models.ProjectSubmission || mongoose.model('ProjectSubmission', projectSubmissionSchema);
 
 module.exports = ProjectSubmission;

@@ -5,6 +5,7 @@ const User = require('../models/userModel');
 const sendEmail = require('../utils/sendEmail');
 const emailTemplates = require('../utils/emailTemplates');
 const socketService = require('../services/SocketService');
+const Enrollment = require('../models/enrollmentModel');
 
 const generateToken = (id) => {
     return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -300,22 +301,36 @@ const getUsers = async (req, res) => {
 
         const users = await User.find(query).select('-password');
 
-        // Populate additional enrollment info for students
-        const usersWithData = await Promise.all(users.map(async (user) => {
+        // Efficiently fetch all enrollments for students in one go
+        const studentIds = users.filter(u => u.role === 'student').map(u => u._id);
+        const allEnrollments = studentIds.length > 0
+            ? await Enrollment.find({ student: { $in: studentIds } })
+                .populate('course', 'title')
+                .lean()
+            : [];
+
+        // Map enrollments to students
+        const enrollmentMap = allEnrollments.reduce((acc, curr) => {
+            const userId = curr.student.toString();
+            if (!acc[userId]) acc[userId] = [];
+            acc[userId].push(curr);
+            return acc;
+        }, {});
+
+        const usersWithData = users.map((user) => {
             if (user.role === 'student') {
-                const Enrollment = require('../models/enrollmentModel');
-                const enrollments = await Enrollment.find({ student: user._id })
-                    .populate('course', 'title')
-                    .sort('-createdAt');
+                const enrollments = enrollmentMap[user._id.toString()] || [];
+                // Sort by date (already lean objects)
+                enrollments.sort((a, b) => b.createdAt - a.createdAt);
 
                 return {
                     ...user.toObject(),
                     enrollmentCount: enrollments.length,
-                    course: enrollments.length > 0 ? enrollments[0].course?.title : 'Enrolled Student'
+                    course: enrollments.length > 0 ? (enrollments[0].course?.title || 'Enrolled') : 'No Courses'
                 };
             }
             return user;
-        }));
+        });
 
         res.json(usersWithData);
     } catch (error) {

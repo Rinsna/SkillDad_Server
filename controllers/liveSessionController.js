@@ -1129,25 +1129,6 @@ const getZoomSDKConfig = asyncHandler(async (req, res) => {
     res.json(sdkConfig);
 });
 
-module.exports = {
-    createSession,
-    getSessions,
-    getSession,
-    startSession,
-    endSession,
-    sendNotification,
-    updateSession,
-    deleteSession,
-    getSessionStatusRoute,
-    getRecordingStatus,
-    getRecordingPlaybackUrl,
-    generateHostLink,
-    getZoomSDKConfig,
-    trackSessionJoin,
-    trackSessionLeave,
-    getCourseLiveSessions,
-};
-
 // @desc    Get live sessions for a specific course
 // @route   GET /api/live-sessions/course/:courseId
 // @access  Private (Student, University, Admin)
@@ -1186,4 +1167,23 @@ const getCourseLiveSessions = asyncHandler(async (req, res) => {
         res.status(500).json({ message: 'Failed to fetch live sessions' });
     }
 });
+
+module.exports = {
+    createSession,
+    getSessions,
+    getSession,
+    startSession,
+    endSession,
+    sendNotification,
+    updateSession,
+    deleteSession,
+    getSessionStatusRoute,
+    getRecordingStatus,
+    getRecordingPlaybackUrl,
+    generateHostLink,
+    getZoomSDKConfig,
+    trackSessionJoin,
+    trackSessionLeave,
+    getCourseLiveSessions,
+};
 

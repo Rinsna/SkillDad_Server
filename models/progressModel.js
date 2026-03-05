@@ -77,6 +77,6 @@ const progressSchema = mongoose.Schema({
     timestamps: true,
 });
 
-const Progress = mongoose.model('Progress', progressSchema);
+const Progress = mongoose.models.Progress || mongoose.model('Progress', progressSchema);
 
 module.exports = Progress;

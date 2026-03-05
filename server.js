@@ -24,16 +24,33 @@ const uploads = {
   PROJECTS: path.join(__dirname, 'uploads/projects')
 };
 
-// Ensure upload directories exist
-Object.values(uploads).forEach(dirPath => {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-    console.log(`[Storage] Verified/Created: ${dirPath}`);
+// Ensure upload directories exist with better error reporting
+console.log('[Storage] Starting directory verification...');
+const uploadsSucceeded = [];
+const uploadsFailed = [];
+
+Object.entries(uploads).forEach(([key, dirPath]) => {
+  try {
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+      console.log(`[Storage] Created ${key}: ${dirPath}`);
+    } else {
+      // Test writability
+      const testFile = path.join(dirPath, '.write-test');
+      fs.writeFileSync(testFile, 'test');
+      fs.unlinkSync(testFile);
+      console.log(`[Storage] Verified ${key} (Writable): ${dirPath}`);
+    }
+    uploadsSucceeded.push(dirPath);
+  } catch (err) {
+    console.error(`[Storage] CRITICAL FAILURE for ${key}: ${dirPath}`, err.message);
+    uploadsFailed.push({ path: dirPath, error: err.message });
   }
 });
 
 // Expose root path for routes to use consistently
 global.BASE_UPLOAD_PATH = uploads.ROOT;
+global.STORAGE_STATUS = { succeeded: uploadsSucceeded, failed: uploadsFailed };
 
 const app = express();
 app.use(cookieParser());
@@ -41,6 +58,15 @@ const server = http.createServer(app);
 
 // Initialize Socket.io
 socketService.init(server);
+
+// Initialize Exam WebSocket Service
+const examWebSocketService = require('./services/examWebSocketService');
+examWebSocketService.init();
+
+// Start timers for ongoing exams (after DB connection)
+setTimeout(() => {
+  examWebSocketService.startTimersForOngoingExams();
+}, 2000); // Wait 2 seconds for DB connection to be ready
 
 // Middleware
 app.use(express.json({
@@ -93,9 +119,12 @@ app.use('/api/sessions', require('./routes/liveSessionRoutes'));
 app.use('/api/finance', require('./routes/financeRoutes'));
 app.use('/api/enquiries', require('./routes/enquiryRoutes'));
 app.use('/api/exams', require('./routes/examRoutes'));
+app.use('/api/results', require('./routes/resultRoutes'));
+app.use('/api', require('./routes/questionRoutes'));
 app.use('/api/documents', require('./routes/documentRoutes'));
 app.use('/api/projects', require('./routes/projectRoutes'));
 app.use('/api/support', require('./routes/supportRoutes'));
+app.use('/api/faqs', require('./routes/faqRoutes'));
 app.use('/api/public', require('./routes/publicRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/webhooks', require('./routes/webhookRoutes'));
@@ -111,9 +140,13 @@ app.get('/', (req, res) => {
   res.send('API is running...');
 });
 
-// Health check endpoint (used by keep-alive ping and uptime monitors)
+// Health check endpoint with storage status
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok-v2', timestamp: new Date().toISOString() });
+  res.status(200).json({
+    status: 'ok-v3',
+    timestamp: new Date().toISOString(),
+    storage: global.STORAGE_STATUS || 'UNKNOWN'
+  });
 });
 
 // Debug routes endpoint (DANGEROUS - ONLY FOR FIXING 404s)
@@ -203,4 +236,22 @@ server.listen(PORT, '0.0.0.0', () => {
       });
     }, 14 * 60 * 1000); // every 14 minutes
   }
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM signal received: closing HTTP server');
+  examWebSocketService.cleanup();
+  server.close(() => {
+    console.log('HTTP server closed');
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT signal received: closing HTTP server');
+  examWebSocketService.cleanup();
+  server.close(() => {
+    console.log('HTTP server closed');
+    process.exit(0);
+  });
 });

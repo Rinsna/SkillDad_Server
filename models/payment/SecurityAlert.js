@@ -8,31 +8,31 @@ const securityAlertSchema = mongoose.Schema({
     required: true,
     index: true,
   },
-  
+
   event: {
     type: String,
     required: true,
   },
-  
+
   // Location Information
   endpoint: {
     type: String,
   },
-  
+
   ipAddress: {
     type: String,
     index: true,
   },
-  
+
   // Alert Details
   data: {
     type: mongoose.Schema.Types.Mixed,
   },
-  
+
   description: {
     type: String,
   },
-  
+
   // Status
   status: {
     type: String,
@@ -40,31 +40,31 @@ const securityAlertSchema = mongoose.Schema({
     default: 'open',
     index: true,
   },
-  
+
   // Resolution
   resolvedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
   },
-  
+
   resolvedAt: {
     type: Date,
   },
-  
+
   resolutionNotes: {
     type: String,
   },
-  
+
   // Notification
   notificationSent: {
     type: Boolean,
     default: false,
   },
-  
+
   notificationSentAt: {
     type: Date,
   },
-  
+
   // Timestamp
   timestamp: {
     type: Date,
@@ -79,6 +79,6 @@ const securityAlertSchema = mongoose.Schema({
 securityAlertSchema.index({ severity: 1, status: 1, timestamp: -1 });
 securityAlertSchema.index({ ipAddress: 1, timestamp: -1 });
 
-const SecurityAlert = mongoose.model('SecurityAlert', securityAlertSchema);
+const SecurityAlert = mongoose.models.SecurityAlert || mongoose.model('SecurityAlert', securityAlertSchema);
 
 module.exports = SecurityAlert;

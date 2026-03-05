@@ -62,18 +62,18 @@ const submissionSchema = mongoose.Schema({
         required: true,
         enum: ['exercise', 'practice', 'quiz']
     },
-    
+
     answers: {
         type: [answerSchema],
         required: true,
         validate: {
-            validator: function(v) {
+            validator: function (v) {
                 return v && v.length > 0;
             },
             message: 'Submission must have at least one answer'
         }
     },
-    
+
     score: {
         type: Number,
         required: true,
@@ -90,7 +90,7 @@ const submissionSchema = mongoose.Schema({
         type: Boolean,
         default: false
     },
-    
+
     status: {
         type: String,
         required: true,
@@ -103,7 +103,7 @@ const submissionSchema = mongoose.Schema({
     },
     gradedAt: { type: Date },
     feedback: { type: String },
-    
+
     attemptNumber: {
         type: Number,
         required: true,
@@ -127,17 +127,17 @@ const submissionSchema = mongoose.Schema({
 });
 
 // Validation for submission-level rules
-submissionSchema.pre('validate', function() {
+submissionSchema.pre('validate', function () {
     // Validate submittedAt is after startedAt
     if (this.submittedAt && this.startedAt && this.submittedAt < this.startedAt) {
         throw new Error('submittedAt must be after startedAt');
     }
-    
+
     // Validate score is between 0 and 100
     if (this.score < 0 || this.score > 100) {
         throw new Error('Score must be between 0 and 100');
     }
-    
+
     // Validate attemptNumber is positive
     if (this.attemptNumber < 1) {
         throw new Error('attemptNumber must be a positive integer');
@@ -149,6 +149,6 @@ submissionSchema.index({ user: 1, course: 1 });
 submissionSchema.index({ content: 1, attemptNumber: 1 });
 submissionSchema.index({ status: 1, course: 1 });
 
-const Submission = mongoose.model('Submission', submissionSchema);
+const Submission = mongoose.models.Submission || mongoose.model('Submission', submissionSchema);
 
 module.exports = Submission;

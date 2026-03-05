@@ -40,6 +40,6 @@ const partnerLogoSchema = new mongoose.Schema({
     timestamps: true
 });
 
-const PartnerLogo = mongoose.model('PartnerLogo', partnerLogoSchema);
+const PartnerLogo = mongoose.models.PartnerLogo || mongoose.model('PartnerLogo', partnerLogoSchema);
 
 module.exports = PartnerLogo;

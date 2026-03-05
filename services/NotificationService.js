@@ -79,6 +79,15 @@ class NotificationService {
                     const resultSubject = data.passed ? `Victory! You passed ${data.examTitle}` : `Result: ${data.examTitle}`;
                     log.status.email = await this._execEmail(user, resultSubject, emailTemplates.examResultAnnounced(user.name, data.examTitle, data.score, data.percentage, data.passed));
                     break;
+                case 'examReminder':
+                    log.status.email = await this._execEmail(user, `Exam Starting Soon: ${data.examTitle}`, emailTemplates.examReminder(user.name, data.examTitle, data.courseTitle, data.startTime, data.duration));
+                    break;
+                case 'examCancelled':
+                    log.status.email = await this._execEmail(user, `Exam Cancelled: ${data.examTitle}`, emailTemplates.examCancelled(user.name, data.examTitle, data.courseTitle, data.reason));
+                    break;
+                case 'submissionConfirmation':
+                    log.status.email = await this._execEmail(user, `Exam Submission Confirmed: ${data.examTitle}`, emailTemplates.submissionConfirmation(user.name, data.examTitle, data.submittedAt, data.isAutoSubmitted));
+                    break;
                 default:
                     log.status.email = await this._execEmail(user, 'SkillDad Notification', `<p>Hello ${user.name}, you have a new notification from SkillDad.</p>`);
             }
@@ -128,6 +137,18 @@ class NotificationService {
                     break;
                 case 'examResult':
                     result = await whatsAppService.notifyExamResult(user.name, user.phone, data.examTitle, data.score, data.percentage, data.passed);
+                    break;
+                case 'examReminder':
+                    // WhatsApp reminder can use a simple template message
+                    result = await whatsAppService.sendTemplateMessage(user.phone, 'exam_reminder', [user.name, data.examTitle, new Date(data.startTime).toLocaleString()]);
+                    break;
+                case 'examCancelled':
+                    // WhatsApp cancellation notification
+                    result = await whatsAppService.sendTemplateMessage(user.phone, 'exam_cancelled', [user.name, data.examTitle, data.reason || 'No reason provided']);
+                    break;
+                case 'submissionConfirmation':
+                    // WhatsApp submission confirmation
+                    result = await whatsAppService.sendTemplateMessage(user.phone, 'exam_submitted', [user.name, data.examTitle]);
                     break;
                 default:
                     result = null;
