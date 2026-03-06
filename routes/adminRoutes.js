@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const upload = require('../middleware/uploadMiddleware');
 const {
     getGlobalStats,
     getAllUsers,
@@ -31,7 +32,9 @@ const {
     assignCoursesToUniversity,
     getUniversityDetail,
     adminEnrollStudent,
-    adminUnenrollStudent
+    adminUnenrollStudent,
+    uploadUniversityProfileImage,
+    updateUniversityProfile
 } = require('../controllers/adminController');
 const { protect } = require('../middleware/authMiddleware');
 
@@ -65,6 +68,8 @@ router.get('/users/:id', protect, checkAdmin, getUserById);
 router.get('/universities', protect, checkAdmin, getUniversities);
 router.get('/universities/:id', protect, checkAdmin, getUniversityDetail);
 router.put('/universities/:id/courses', protect, checkAdmin, assignCoursesToUniversity);
+router.put('/universities/:id/profile', protect, checkAdmin, updateUniversityProfile);
+router.post('/universities/:id/upload-image', protect, checkAdmin, upload.single('profileImage'), uploadUniversityProfileImage);
 // All users without pagination — used by B2B management
 router.get('/users/all', protect, checkAdmin, async (req, res) => {
     try {

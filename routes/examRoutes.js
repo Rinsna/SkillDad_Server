@@ -20,41 +20,41 @@ const { uploadQuestionPaper, uploadAnswerSheet, handleUploadError } = require('.
 
 // @desc    Schedule a new exam
 // @route   POST /api/exams/admin/schedule
-// @access  Private (Admin)
+// @access  Private (Admin/University)
 router.post(
     '/admin/schedule',
     protect,
-    authorize('admin'),
+    authorize('admin', 'university'),
     examController.scheduleExam
 );
 
 // @desc    Update exam details
 // @route   PUT /api/exams/admin/:examId
-// @access  Private (Admin)
+// @access  Private (Admin/University)
 router.put(
     '/admin/:examId',
     protect,
-    authorize('admin'),
+    authorize('admin', 'university'),
     examController.updateExam
 );
 
 // @desc    Delete exam and all associated resources
 // @route   DELETE /api/exams/admin/:examId
-// @access  Private (Admin)
+// @access  Private (Admin/University)
 router.delete(
     '/admin/:examId',
     protect,
-    authorize('admin'),
+    authorize('admin', 'university'),
     examController.deleteExam
 );
 
 // @desc    Get all exams with filtering and pagination
 // @route   GET /api/exams/admin/all
-// @access  Private (Admin)
+// @access  Private (Admin/University)
 router.get(
     '/admin/all',
     protect,
-    authorize('admin'),
+    authorize('admin', 'university'),
     examController.getAllExams
 );
 

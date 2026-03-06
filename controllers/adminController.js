@@ -1006,14 +1006,29 @@ const adminEnrollStudent = async (req, res) => {
             return res.status(400).json({ message: `${student.name} is already enrolled in ${course.title}` });
         }
 
-        // If universityId is provided, update student's universityId
+        // Determine and update student's universityId
+        let assignedUniversityId = universityId;
+
         if (universityId) {
+            // If universityId is explicitly provided, validate and use it
             const university = await User.findById(universityId);
             if (!university || university.role !== 'university') {
                 return res.status(400).json({ message: 'Invalid university ID' });
             }
-            student.universityId = universityId;
+            assignedUniversityId = universityId;
+        } else if (course.instructor) {
+            // Auto-detect university from course instructor
+            const instructor = await User.findById(course.instructor).select('role _id');
+            if (instructor && instructor.role === 'university') {
+                assignedUniversityId = instructor._id;
+            }
+        }
+
+        // Update student's universityId if we have one
+        if (assignedUniversityId && (!student.universityId || student.universityId.toString() !== assignedUniversityId.toString())) {
+            student.universityId = assignedUniversityId;
             await student.save();
+            console.log(`[adminEnrollStudent] Updated student ${student.name} universityId to ${assignedUniversityId}`);
         }
 
         // Create enrollment
@@ -1025,6 +1040,27 @@ const adminEnrollStudent = async (req, res) => {
             enrollmentDate: new Date()
         });
 
+        // Create Progress record so course appears in student's "My Courses"
+        const Progress = require('../models/progressModel');
+        try {
+            // Check if progress record already exists
+            const existingProgress = await Progress.findOne({ user: studentId, course: courseId });
+            if (!existingProgress) {
+                await Progress.create({
+                    user: studentId,
+                    course: courseId,
+                    completedVideos: [],
+                    completedExercises: [],
+                    projectSubmissions: [],
+                    isCompleted: false
+                });
+                console.log(`[adminEnrollStudent] Created Progress record for student ${student.name} in course ${course.title}`);
+            }
+        } catch (progressError) {
+            console.error('[adminEnrollStudent] Error creating Progress record:', progressError.message);
+            // Don't fail the enrollment if Progress creation fails
+        }
+
         // Create a free Payment record so it appears in Finance Dashboard
         const Payment = require('../models/paymentModel');
         const txnId = `ADM-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
@@ -1032,7 +1068,7 @@ const adminEnrollStudent = async (req, res) => {
         // Determine partner/center from student or provided universityId
         let partnerId = null;
         let centerName = 'Admin Enrolled';
-        
+
         if (universityId) {
             // Use the provided university
             partnerId = universityId;
@@ -1068,7 +1104,7 @@ const adminEnrollStudent = async (req, res) => {
             reviewedAt: new Date()
         });
 
-        // Notify via socket
+        // Notify via socket - Student notification
         try {
             socketService.emitToUser(studentId.toString(), 'ENROLLMENT_CREATED', {
                 courseId,
@@ -1076,6 +1112,56 @@ const adminEnrollStudent = async (req, res) => {
                 message: `You have been enrolled in ${course.title} by admin`
             });
         } catch (e) { /* socket optional */ }
+
+        // Notify university panel in real-time
+        if (assignedUniversityId) {
+            try {
+                socketService.emitToUser(assignedUniversityId.toString(), 'STUDENT_ENROLLED', {
+                    studentId: student._id,
+                    studentName: student.name,
+                    studentEmail: student.email,
+                    courseId,
+                    courseTitle: course.title,
+                    enrollmentId: enrollment._id,
+                    message: `${student.name} has been enrolled in ${course.title}`
+                });
+                console.log(`[adminEnrollStudent] Notified university ${assignedUniversityId} about new student enrollment`);
+            } catch (e) {
+                console.error('[adminEnrollStudent] University socket notification error:', e.message);
+            }
+        }
+
+        // Send Email and WhatsApp notifications
+        try {
+            const sendEmail = require('../utils/sendEmail');
+            const emailTemplates = require('../utils/emailTemplates');
+            const whatsAppService = require('../services/WhatsAppService');
+
+            const enrolledBy = req.user?.name || 'Admin';
+
+            // Send email notification
+            if (student.email) {
+                await sendEmail({
+                    email: student.email,
+                    subject: `Course Enrollment Confirmed - ${course.title}`,
+                    html: emailTemplates.adminEnrollment(student.name, course.title, enrolledBy)
+                }).catch(err => console.error('[adminEnrollStudent] Email error:', err.message));
+            }
+
+            // Send WhatsApp notification
+            const studentPhone = student.phone || student.profile?.phone;
+            if (studentPhone) {
+                await whatsAppService.notifyAdminEnrollment(
+                    student.name,
+                    studentPhone,
+                    course.title,
+                    enrolledBy
+                ).catch(err => console.error('[adminEnrollStudent] WhatsApp error:', err.message));
+            }
+        } catch (notifError) {
+            console.error('[adminEnrollStudent] Notification error:', notifError.message);
+            // Don't fail the enrollment if notifications fail
+        }
 
         res.status(201).json({
             message: `${student.name} successfully enrolled in ${course.title}${universityId ? ' and assigned to university' : ''}`,
@@ -1117,6 +1203,75 @@ const adminUnenrollStudent = async (req, res) => {
     }
 };
 
+// @desc    Admin updates university profile image
+// @route   POST /api/admin/universities/:id/upload-image
+// @access  Private (Admin)
+const uploadUniversityProfileImage = async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id);
+
+        if (!user || user.role !== 'university') {
+            return res.status(404).json({ message: 'University not found' });
+        }
+
+        if (!req.file) {
+            return res.status(400).json({ message: 'Please upload an image' });
+        }
+
+        // Use the same path format as userController
+        const imagePath = `/uploads/${req.file.filename}`;
+        user.profileImage = imagePath;
+
+        await user.save();
+
+        res.json({
+            message: 'University profile image updated',
+            profileImage: imagePath
+        });
+    } catch (error) {
+        console.error('[uploadUniversityProfileImage] Error:', error);
+        res.status(500).json({ message: error.message || 'Server error uploading image' });
+    }
+};
+
+// @desc    Admin updates university profile data (bio, location, etc.)
+// @route   PUT /api/admin/universities/:id/profile
+// @access  Private (Admin)
+const updateUniversityProfile = async (req, res) => {
+    try {
+        const { bio, location, website, phone } = req.body;
+        const user = await User.findById(req.params.id);
+
+        if (!user || user.role !== 'university') {
+            return res.status(404).json({ message: 'University not found' });
+        }
+
+        // Initialize profile if it doesn't exist
+        if (!user.profile) {
+            user.profile = {};
+        }
+
+        user.bio = bio !== undefined ? bio : user.bio;
+        user.profile.location = location !== undefined ? location : user.profile.location;
+        user.profile.website = website !== undefined ? website : user.profile.website;
+        user.profile.phone = phone !== undefined ? phone : user.profile.phone;
+
+        const updatedUser = await user.save();
+
+        res.json({
+            message: 'University profile updated successfully',
+            user: {
+                _id: updatedUser._id,
+                bio: updatedUser.bio,
+                profile: updatedUser.profile
+            }
+        });
+    } catch (error) {
+        console.error('[updateUniversityProfile] Error:', error);
+        res.status(500).json({ message: error.message || 'Server error updating profile' });
+    }
+};
+
 module.exports = {
     updateEntity,
     getGlobalStats,
@@ -1148,5 +1303,7 @@ module.exports = {
     assignCoursesToUniversity,
     getUniversityDetail,
     adminEnrollStudent,
-    adminUnenrollStudent
+    adminUnenrollStudent,
+    uploadUniversityProfileImage,
+    updateUniversityProfile
 };
