@@ -268,9 +268,12 @@ const addModule = asyncHandler(async (req, res) => {
             videos: [],
         };
 
-        course.modules.push(newModule);
-        await course.save();
-        res.status(201).json(course);
+        const updatedCourse = await Course.findByIdAndUpdate(
+            req.params.id,
+            { $push: { modules: newModule } },
+            { new: true, lean: true }
+        );
+        res.status(201).json(updatedCourse);
     } else {
         res.status(404);
         throw new Error('Course not found');
@@ -298,9 +301,19 @@ const addVideo = asyncHandler(async (req, res) => {
                 duration,
                 exercises: []
             };
-            module.videos.push(newVideo);
-            await course.save();
-            res.status(201).json(course);
+
+            const updatedCourse = await Course.findOneAndUpdate(
+                { _id: req.params.id, 'modules._id': req.params.moduleId },
+                { $push: { 'modules.$.videos': newVideo } },
+                { new: true, lean: true }
+            );
+
+            if (updatedCourse) {
+                res.status(201).json(updatedCourse);
+            } else {
+                res.status(404);
+                throw new Error('Module not found');
+            }
         } else {
             res.status(404);
             throw new Error('Module not found');

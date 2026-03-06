@@ -1,0 +1,38 @@
+﻿Connecting to Local DB...
+Connected to Local DB (skilldad db)!
+
+--- Local DB Collection Counts ---
+results                  : 0
+documents                : 0
+payouts                  : 4
+submissions              : 0
+livesessions             : 10
+projects                 : 1
+paymentsessions          : 0
+payments                 : 8
+courses                  : 11
+paymentauditlogs         : 0
+gatewayconfigs           : 0
+projectsubmissions       : 0
+questions                : 0
+securityalerts           : 0
+examsubmissions          : 0
+discounts                : 4
+directors                : 8
+reconciliations          : 0
+skilldaduniversities     : 0
+auditlogs                : 6
+enquiries                : 0
+partnerlogos             : 16
+progresses               : 3
+faqs                     : 28
+examsubmissionnews       : 0
+exams                    : 2
+interactivecontents      : 9
+users                    : 14
+transactions             : 0
+faqsearchanalytics       : 1
+notificationlogs         : 141
+groups                   : 2
+supports                 : 3
+enrollments              : 10

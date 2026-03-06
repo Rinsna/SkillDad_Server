@@ -1,6 +1,7 @@
 const DailyReconciliationJob = require('./dailyReconciliationJob');
 const SessionCleanupJob = require('./sessionCleanupJob');
 const MonitoringAlertJob = require('./monitoringAlertJob');
+const { startExamReminderJob, stopExamReminderJob, getJobStatus } = require('./examReminderJob');
 
 /**
  * Job Scheduler
@@ -45,6 +46,13 @@ class JobScheduler {
       this.jobs.monitoringAlert = {
         instance: monitoringAlertJob,
         cronJob: scheduledMonitoringJob,
+      };
+
+      // Initialize Exam Reminder Job
+      startExamReminderJob();
+      this.jobs.examReminder = {
+        instance: { getStatus: getJobStatus },
+        cronJob: null, // Managed internally by examReminderJob
       };
 
       console.log('[Job Scheduler] All jobs initialized successfully');
@@ -95,6 +103,9 @@ class JobScheduler {
         console.log(`[Job Scheduler] Stopped job: ${jobName}`);
       }
     }
+
+    // Stop exam reminder job
+    stopExamReminderJob();
   }
 }
 

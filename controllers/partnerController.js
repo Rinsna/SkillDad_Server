@@ -54,9 +54,21 @@ const Payout = require('../models/payoutModel');
 // @access  Private (Partner)
 const getDiscounts = async (req, res) => {
     try {
-        const discounts = await Discount.find({ partner: req.user.id }).sort('-createdAt');
+        // Get discount codes that are either:
+        // 1. Assigned to this partner specifically
+        // 2. Global codes (no partner assigned)
+        const discounts = await Discount.find({
+            $or: [
+                { partner: req.user.id },
+                { partner: null },
+                { partner: { $exists: false } }
+            ],
+            isActive: true // Only return active codes
+        }).sort('-createdAt');
+        
         res.json(discounts);
     } catch (error) {
+        console.error('Error fetching partner discounts:', error);
         res.status(500).json({ message: error.message });
     }
 };

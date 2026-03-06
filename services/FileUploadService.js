@@ -58,7 +58,7 @@ class FileUploadService {
   }
 
   /**
-   * Validate file type and size
+   * Validate file type and size with enhanced security checks
    * @param {Object} file - Multer file object
    * @param {string} fileType - 'questionPaper' or 'answerSheet'
    * @returns {Object} { valid: boolean, error?: string }
@@ -82,7 +82,15 @@ class FileUploadService {
       };
     }
 
-    // Check MIME type
+    // Check for minimum file size (prevent empty files)
+    if (file.size < 100) {
+      return {
+        valid: false,
+        error: 'File is too small or empty'
+      };
+    }
+
+    // Check MIME type from multer
     if (!limits.allowedTypes.includes(file.mimetype)) {
       return { 
         valid: false, 
@@ -99,7 +107,94 @@ class FileUploadService {
       };
     }
 
+    // Additional security: Validate file signature (magic numbers) for PDFs
+    if (ext === '.pdf') {
+      const isValidPDF = this.validatePDFSignature(file);
+      if (!isValidPDF) {
+        return {
+          valid: false,
+          error: 'File does not appear to be a valid PDF'
+        };
+      }
+    }
+
+    // Additional security: Validate image signatures for common formats
+    if (['.jpg', '.jpeg', '.png'].includes(ext)) {
+      const isValidImage = this.validateImageSignature(file, ext);
+      if (!isValidImage) {
+        return {
+          valid: false,
+          error: 'File does not appear to be a valid image'
+        };
+      }
+    }
+
+    // Check for suspicious file names
+    const suspiciousPatterns = [
+      /\.\./,  // Path traversal
+      /[<>:"|?*]/,  // Invalid characters
+      /\0/,  // Null bytes
+      /\.exe$/i,  // Executable
+      /\.sh$/i,  // Shell script
+      /\.bat$/i,  // Batch file
+      /\.cmd$/i,  // Command file
+    ];
+
+    for (const pattern of suspiciousPatterns) {
+      if (pattern.test(file.originalname)) {
+        return {
+          valid: false,
+          error: 'File name contains suspicious characters or patterns'
+        };
+      }
+    }
+
     return { valid: true };
+  }
+
+  /**
+   * Validate PDF file signature (magic numbers)
+   * @param {Object} file - Multer file object
+   * @returns {boolean} True if valid PDF
+   */
+  validatePDFSignature(file) {
+    try {
+      const buffer = file.buffer || fsSync.readFileSync(file.path);
+      // PDF files start with %PDF-
+      const pdfSignature = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2D]);
+      return buffer.slice(0, 5).equals(pdfSignature);
+    } catch (error) {
+      console.error('Error validating PDF signature:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Validate image file signature (magic numbers)
+   * @param {Object} file - Multer file object
+   * @param {string} ext - File extension
+   * @returns {boolean} True if valid image
+   */
+  validateImageSignature(file, ext) {
+    try {
+      const buffer = file.buffer || fsSync.readFileSync(file.path);
+      
+      // JPEG signature: FF D8 FF
+      if (ext === '.jpg' || ext === '.jpeg') {
+        return buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF;
+      }
+      
+      // PNG signature: 89 50 4E 47 0D 0A 1A 0A
+      if (ext === '.png') {
+        const pngSignature = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        return buffer.slice(0, 8).equals(pngSignature);
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('Error validating image signature:', error);
+      return false;
+    }
   }
 
   /**

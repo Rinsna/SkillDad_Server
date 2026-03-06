@@ -9,6 +9,7 @@ const NotificationService = require('../services/NotificationService');
 const ExamNotificationService = require('../services/ExamNotificationService');
 const examAccessService = require('../services/examAccessService');
 const auditLogService = require('../services/auditLogService');
+const { invalidateExamCache } = require('../middleware/cacheMiddleware');
 
 /**
  * Exam Controller
@@ -248,6 +249,9 @@ const updateExam = async (req, res) => {
 
     await exam.save();
 
+    // Invalidate cache for this exam
+    await invalidateExamCache(examId);
+
     // Populate references
     await exam.populate('course', 'title');
     await exam.populate('university', 'name email');
@@ -325,6 +329,9 @@ const deleteExam = async (req, res) => {
 
     // Delete the exam itself
     await Exam.findByIdAndDelete(examId);
+
+    // Invalidate cache for this exam
+    await invalidateExamCache(examId);
 
     // Log audit event for exam deletion
     try {
@@ -411,14 +418,15 @@ const getAllExams = async (req, res) => {
     const sort = {};
     sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
 
-    // Execute query with pagination
+    // Execute query with pagination and selective population
     const exams = await Exam.find(filter)
-      .populate('course', 'title')
-      .populate('university', 'name email')
-      .populate('createdBy', 'name email')
+      .populate('course', 'title') // Only populate title for course
+      .populate('university', 'name email profile') // Populate name, email, and profile for university
+      .populate('createdBy', 'name email') // Only populate name and email for creator
       .sort(sort)
       .skip(skip)
-      .limit(limitNum);
+      .limit(limitNum)
+      .lean(); // Use lean() for better performance when not modifying documents
 
     // Get total count for pagination
     const totalExams = await Exam.countDocuments(filter);
@@ -839,19 +847,22 @@ const getStudentExams = async (req, res) => {
 
     const courseIds = enrollments.map((e) => e.course);
 
-    // Fetch exams for these courses
+    // Fetch exams for these courses with selective population
     const exams = await Exam.find({
       course: { $in: courseIds },
     })
-      .populate('course', 'title')
-      .populate('university', 'name email')
-      .sort({ scheduledStartTime: -1 });
+      .populate('course', 'title') // Only populate title
+      .populate('university', 'name') // Only populate name
+      .sort({ scheduledStartTime: -1 })
+      .lean(); // Use lean() for better performance
 
-    // Get student's submissions for these exams
+    // Get student's submissions for these exams with minimal fields
     const submissions = await ExamSubmissionNew.find({
       exam: { $in: exams.map((e) => e._id) },
       student: studentId,
-    });
+    })
+      .select('exam status submittedAt obtainedMarks totalMarks percentage') // Only select needed fields
+      .lean();
 
     // Combine exam data with submission status
     const examsWithStatus = exams.map((exam) => {
@@ -860,7 +871,7 @@ const getStudentExams = async (req, res) => {
       );
 
       return {
-        ...exam.toObject(),
+        ...exam, // Already a plain object from lean()
         submission: submission || null,
         hasSubmitted: submission && submission.status !== 'in-progress',
       };
@@ -1037,24 +1048,16 @@ const startExam = async (req, res) => {
     ) {
       let questions = await Question.find({ exam: examId }).sort({ order: 1 });
 
-      // Shuffle questions if configured
-      if (exam.shuffleQuestions) {
-        questions = questions.sort(() => Math.random() - 0.5);
-      }
-
-      // Remove correct answers from MCQ questions for security
-      const sanitizedQuestions = questions.map((q) => {
-        const questionObj = q.toObject();
-        if (questionObj.questionType === 'mcq') {
-          questionObj.options = questionObj.options.map((opt) => ({
-            text: opt.text,
-            // Don't send isCorrect to client
-          }));
+      // Process questions with integrity measures (shuffling, option randomization)
+      const examIntegrityService = require('../services/examIntegrityService');
+      const processedQuestions = examIntegrityService.processQuestionsForDelivery(
+        questions,
+        {
+          shuffleQuestions: exam.shuffleQuestions
         }
-        return questionObj;
-      });
+      );
 
-      responseData.questions = sanitizedQuestions;
+      responseData.questions = processedQuestions;
     }
 
     res.status(200).json({

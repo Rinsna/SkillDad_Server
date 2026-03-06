@@ -15,7 +15,9 @@ const faqSchema = new mongoose.Schema({
             'Technical Issues',
             'Certificates & Graduation',
             'Refunds & Cancellations',
-            'Mobile & Compatibility'
+            'Mobile & Compatibility',
+            'Universities',
+            'Courses'
         ]
     },
     help_link: { type: String, default: '' },
@@ -25,6 +27,6 @@ const faqSchema = new mongoose.Schema({
     downvotes: { type: Number, default: 0 }
 }, { timestamps: true });
 
-faqSchema.index({ question: 'text', answer: 'text' });
+faqSchema.index({ question: 'text', answer: 'text', category: 'text' });
 
 module.exports = mongoose.models.FAQ || mongoose.model('FAQ', faqSchema);

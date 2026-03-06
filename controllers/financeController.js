@@ -101,27 +101,126 @@ const getStudentPayments = async (req, res) => {
 
             query.$or = [
                 { student: { $in: students.map(s => s._id) } },
-                { course: { $in: courses.map(c => c._id) } }
+                { course: { $in: courses.map(c => c._id) } },
+                { transactionId: { $regex: search, $options: 'i' } }
             ];
         }
 
-        const payments = await Payment.find(query)
+        // Fetch manual payments
+        const manualPayments = await Payment.find(query)
             .populate('student', 'name email')
-            .populate('course', 'title')
+            .populate('course', 'title price')
             .populate('partner', 'name')
-            .sort('-createdAt')
-            .limit(limit * 1)
-            .skip((page - 1) * limit);
+            .lean();
 
-        const count = await Payment.countDocuments(query);
+        // Fetch gateway transactions that resulted in success
+        let transactionQuery = {};
+        if (status && status !== 'all') {
+            if (status === 'approved') transactionQuery.status = 'success';
+            else if (status === 'pending') transactionQuery.status = 'pending';
+            else if (status === 'rejected') transactionQuery.status = 'failed';
+        } else {
+            transactionQuery.status = { $in: ['success', 'pending', 'failed'] };
+        }
+
+        if (partner && partner !== 'all') {
+            const studentsOfPartner = await User.find({
+                $or: [
+                    { registeredBy: partner },
+                    { universityId: partner }
+                ]
+            }).select('_id');
+            transactionQuery.student = { $in: studentsOfPartner.map(s => s._id) };
+        }
+
+        if (search) {
+            // Re-use student/course IDs from above
+            const students = await User.find({
+                $or: [
+                    { name: { $regex: search, $options: 'i' } },
+                    { email: { $regex: search, $options: 'i' } }
+                ]
+            }).select('_id');
+
+            const courses = await Course.find({
+                title: { $regex: search, $options: 'i' }
+            }).select('_id');
+
+            const searchConditions = [
+                { student: { $in: students.map(s => s._id) } },
+                { course: { $in: courses.map(c => c._id) } },
+                { transactionId: { $regex: search, $options: 'i' } }
+            ];
+
+            if (transactionQuery.student) {
+                // If already filtering by partner, we need to intersect
+                transactionQuery.$and = [
+                    { student: transactionQuery.student },
+                    { $or: searchConditions }
+                ];
+                delete transactionQuery.student;
+            } else {
+                transactionQuery.$or = searchConditions;
+            }
+        }
+
+        const gatewayTransactions = await Transaction.find(transactionQuery)
+            .populate({
+                path: 'student',
+                select: 'name email registeredBy universityId',
+                populate: [
+                    { path: 'registeredBy', select: 'name profile.partnerName' },
+                    { path: 'universityId', select: 'name profile.universityName' }
+                ]
+            })
+            .populate('course', 'title price')
+            .lean();
+
+        // Map transactions to payment format
+        const mappedTransactions = gatewayTransactions.map(t => {
+            const student = t.student || {};
+            const partnerUser = student.universityId || student.registeredBy;
+            const partnerInfo = partnerUser ? {
+                _id: partnerUser._id,
+                name: partnerUser.profile?.universityName || partnerUser.profile?.partnerName || partnerUser.name
+            } : null;
+
+            return {
+                _id: t._id,
+                student: {
+                    _id: student._id,
+                    name: student.name,
+                    email: student.email
+                },
+                course: t.course,
+                amount: t.finalAmount ? parseFloat(t.finalAmount.toString()) : 0,
+                status: t.status === 'success' ? 'approved' : t.status === 'failed' ? 'rejected' : 'pending',
+                paymentMethod: t.paymentMethod || 'gateway',
+                transactionId: t.transactionId,
+                partner: partnerInfo,
+                createdAt: t.createdAt,
+                isGateway: true
+            };
+        });
+
+        // Combine and sort
+        let allPayments = [...manualPayments, ...mappedTransactions];
+        allPayments.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+        // Manual Pagination
+        const total = allPayments.length;
+        const paginatedPayments = allPayments.slice((page - 1) * limit, page * limit);
 
         res.json({
-            payments,
-            totalPages: Math.ceil(count / limit),
-            currentPage: page,
-            total: count
+            payments: paginatedPayments,
+            pagination: {
+                total,
+                page: parseInt(page),
+                pages: Math.ceil(total / limit)
+            }
         });
     } catch (error) {
+        console.error('Error in getStudentPayments:', error);
         res.status(500).json({ message: error.message });
     }
 };
@@ -168,6 +267,24 @@ const updatePaymentStatus = async (req, res) => {
                 await enrollment.save();
             }
 
+            // Ensure Progress record exists for the student to see the course
+            const Progress = require('../models/progressModel');
+            let progress = await Progress.findOne({
+                user: payment.student._id,
+                course: payment.course._id
+            });
+
+            if (!progress) {
+                await Progress.create({
+                    user: payment.student._id,
+                    course: payment.course._id,
+                    completedVideos: [],
+                    completedExercises: [],
+                    projectSubmissions: [],
+                });
+                console.log(`[Finance] Created progress record for student ${payment.student._id} in course ${payment.course._id}`);
+            }
+
             // Real-time Notification
             if (socketService) {
                 socketService.sendToUser(payment.student._id.toString(), 'notification', {
@@ -200,8 +317,8 @@ const updatePaymentStatus = async (req, res) => {
 // @access  Private (Finance)
 const getEnrollmentSummaries = async (req, res) => {
     try {
-        // Get summaries grouped by partner
-        const summaries = await Payment.aggregate([
+        // Get summaries from manual payments
+        const manualSummaries = await Payment.aggregate([
             {
                 $lookup: {
                     from: 'users',
@@ -236,27 +353,102 @@ const getEnrollmentSummaries = async (req, res) => {
                         $sum: { $cond: [{ $eq: ['$status', 'rejected'] }, 1, 0] }
                     }
                 }
-            },
-            {
-                $project: {
-                    _id: 0,
-                    partner: '$_id.partner',
-                    partnerName: 1,
-                    center: 1,
-                    totalEnrollments: 1,
-                    totalAmount: 1,
-                    pendingPayments: 1,
-                    approvedPayments: 1,
-                    rejectedPayments: 1
-                }
-            },
-            {
-                $sort: { totalAmount: -1 }
             }
         ]);
 
-        res.json(summaries);
+        // Get summaries from gateway transactions
+        const gatewayTransactions = await Transaction.find({ status: 'success' })
+            .populate({
+                path: 'student',
+                select: 'registeredBy universityId',
+                populate: [
+                    { path: 'registeredBy', select: 'name profile.partnerName' },
+                    { path: 'universityId', select: 'name profile.universityName' }
+                ]
+            })
+            .lean();
+
+        // Process gateway transactions into the same format
+        const gatewaySummariesMap = {};
+
+        gatewayTransactions.forEach(t => {
+            const student = t.student || {};
+            const university = student.universityId;
+            const partner = student.registeredBy;
+
+            let centerName = 'Online/Direct';
+            let partnerId = null;
+            let partnerName = 'Direct';
+
+            if (university) {
+                centerName = university.profile?.universityName || university.name;
+                partnerId = university._id.toString();
+                partnerName = university.name;
+            } else if (partner) {
+                centerName = partner.profile?.partnerName || partner.name || 'Partner Network';
+                partnerId = partner._id.toString();
+                partnerName = partner.name;
+            }
+
+            const key = `${partnerId}-${centerName}`;
+            if (!gatewaySummariesMap[key]) {
+                gatewaySummariesMap[key] = {
+                    partner: partnerId,
+                    partnerName,
+                    center: centerName,
+                    totalEnrollments: 0,
+                    totalAmount: 0,
+                    pendingPayments: 0,
+                    approvedPayments: 0,
+                    rejectedPayments: 0
+                };
+            }
+
+            const amount = t.finalAmount ? parseFloat(t.finalAmount.toString()) : 0;
+            gatewaySummariesMap[key].totalEnrollments += 1;
+            gatewaySummariesMap[key].totalAmount += amount;
+            gatewaySummariesMap[key].approvedPayments += 1;
+        });
+
+        // Merge manual and gateway summaries
+        const finalSummariesMap = {};
+
+        manualSummaries.forEach(s => {
+            const partnerId = s._id.partner ? s._id.partner.toString() : 'null';
+            const centerName = s.center || 'Direct';
+            const key = `${partnerId}-${centerName}`;
+
+            finalSummariesMap[key] = {
+                partner: s._id.partner,
+                partnerName: s.partnerName,
+                center: centerName,
+                totalEnrollments: s.totalEnrollments,
+                totalAmount: s.totalAmount,
+                pendingPayments: s.pendingPayments,
+                approvedPayments: s.approvedPayments,
+                rejectedPayments: s.rejectedPayments
+            };
+        });
+
+        Object.values(gatewaySummariesMap).forEach(gs => {
+            const partnerId = gs.partner ? gs.partner.toString() : 'null';
+            const centerName = gs.center;
+            const key = `${partnerId}-${centerName}`;
+
+            if (finalSummariesMap[key]) {
+                finalSummariesMap[key].totalEnrollments += gs.totalEnrollments;
+                finalSummariesMap[key].totalAmount += gs.totalAmount;
+                finalSummariesMap[key].approvedPayments += gs.approvedPayments;
+            } else {
+                finalSummariesMap[key] = gs;
+            }
+        });
+
+        const sortedSummaries = Object.values(finalSummariesMap).sort((a, b) => b.totalAmount - a.totalAmount);
+
+        res.json(sortedSummaries);
     } catch (error) {
+        console.error('Error in getEnrollmentSummaries:', error);
         res.status(500).json({ message: error.message });
     }
 };
@@ -390,8 +582,8 @@ const exportReport = async (req, res) => {
                 break;
             }
 
-            case 'payments':
-                data = await Payment.find({
+            case 'payments': {
+                const manualPayments = await Payment.find({
                     ...(startDate && endDate ? {
                         createdAt: {
                             $gte: new Date(startDate),
@@ -402,8 +594,32 @@ const exportReport = async (req, res) => {
                     .populate('student', 'name email')
                     .populate('course', 'title')
                     .populate('partner', 'name')
-                    .sort('-createdAt');
+                    .lean();
+
+                const gatewayPayments = await Transaction.find({
+                    status: 'success',
+                    ...(startDate && endDate ? {
+                        createdAt: {
+                            $gte: new Date(startDate),
+                            $lte: new Date(endDate)
+                        }
+                    } : {})
+                })
+                    .populate('student', 'name email')
+                    .populate('course', 'title')
+                    .lean();
+
+                const mappedGateway = gatewayPayments.map(t => ({
+                    ...t,
+                    amount: t.finalAmount ? parseFloat(t.finalAmount.toString()) : 0,
+                    status: 'approved',
+                    paymentMethod: t.paymentMethod || 'gateway',
+                    isGateway: true
+                }));
+
+                data = [...manualPayments, ...mappedGateway].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
                 break;
+            }
 
             case 'payouts':
                 data = await Payout.find({
@@ -418,8 +634,8 @@ const exportReport = async (req, res) => {
                     .sort('-createdAt');
                 break;
 
-            case 'enrollments':
-                data = await Payment.aggregate([
+            case 'enrollments': {
+                const manualEnrollments = await Payment.aggregate([
                     {
                         $group: {
                             _id: '$center',
@@ -432,10 +648,25 @@ const exportReport = async (req, res) => {
                                 $sum: { $cond: [{ $eq: ['$status', 'approved'] }, 1, 0] }
                             }
                         }
-                    },
-                    { $sort: { totalAmount: -1 } }
+                    }
                 ]);
+
+                const gatewayEnrollments = await Transaction.aggregate([
+                    { $match: { status: 'success' } },
+                    {
+                        $group: {
+                            _id: 'Online Payment',
+                            totalEnrollments: { $sum: 1 },
+                            totalAmount: { $sum: { $toDouble: '$finalAmount' } },
+                            pendingCount: { $sum: 0 },
+                            approvedCount: { $sum: 1 }
+                        }
+                    }
+                ]);
+
+                data = [...manualEnrollments, ...gatewayEnrollments].sort((a, b) => b.totalAmount - a.totalAmount);
                 break;
+            }
 
             default:
                 return res.status(400).json({ message: 'Invalid report type' });
@@ -452,6 +683,21 @@ const exportReport = async (req, res) => {
     }
 };
 
+// @desc    Get all partners and universities (for filtering)
+// @route   GET /api/finance/partners
+// @access  Private (Finance)
+const getFinancePartners = async (req, res) => {
+    try {
+        const partners = await User.find({
+            role: { $in: ['partner', 'university'] }
+        }).select('_id name email role profile.universityName');
+
+        res.json(partners);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 module.exports = {
     getFinanceStats,
     getStudentPayments,
@@ -460,4 +706,5 @@ module.exports = {
     approvePayout,
     getPayoutHistory,
     exportReport,
+    getFinancePartners
 };

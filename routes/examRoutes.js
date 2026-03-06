@@ -233,9 +233,9 @@ router.get('/', protect, async (req, res) => {
             query = {
                 $or: [
                     { course: { $in: courseIds } },
-                    { targetUniversity: req.user._id },
-                    { targetUniversity: null },
-                    { targetUniversity: { $exists: false } }
+                    { university: req.user._id },
+                    { university: null },
+                    { university: { $exists: false } }
                 ]
             };
             console.log(`[EXAM ROUTE] University Filter:`, JSON.stringify(query));
@@ -243,11 +243,9 @@ router.get('/', protect, async (req, res) => {
 
         const exams = await Exam.find(query)
             .populate('course', 'title')
-            .populate('instructor', 'name email role profile')
-            .populate('targetUniversity', 'name profile')
-            .populate('linkedPaper')
-            .populate('answerKey')
-            .sort({ scheduledDate: -1 });
+            .populate('createdBy', 'name email role profile')
+            .populate('university', 'name profile')
+            .sort({ scheduledStartTime: -1 });
 
         res.json(exams);
     } catch (error) {
@@ -264,7 +262,7 @@ router.get('/course/:courseId', protect, async (req, res) => {
         const exams = await Exam.find({
             course: req.params.courseId,
             isPublished: true
-        }).populate('instructor', 'name email');
+        }).populate('createdBy', 'name email');
 
         res.json(exams);
     } catch (error) {
@@ -289,7 +287,7 @@ router.get('/my-exams', protect, async (req, res) => {
             course: { $in: courseIds },
             isPublished: true
         }).populate('course', 'title')
-            .populate('instructor', 'name')
+            .populate('createdBy', 'name')
             .populate('linkedPaper')
             .populate('answerKey');
 
@@ -347,7 +345,8 @@ router.get('/:id', protect, async (req, res) => {
     try {
         const exam = await Exam.findById(req.params.id)
             .populate('course', 'title')
-            .populate('instructor', 'name email');
+            .populate('createdBy', 'name email')
+            .populate('university', 'name');
 
         if (!exam) {
             return res.status(404).json({ message: 'Exam not found' });
@@ -355,6 +354,7 @@ router.get('/:id', protect, async (req, res) => {
 
         res.json(exam);
     } catch (error) {
+        console.error('[GET EXAM BY ID] Error:', error);
         res.status(500).json({ message: error.message });
     }
 });
@@ -459,7 +459,7 @@ router.post('/', protect, authorize('admin', 'university'), async (req, res) => 
             if (slotId) {
                 matchingAdminSlot = await Exam.findOne({
                     _id: slotId,
-                    instructor: { $in: adminIds },
+                    createdBy: { $in: adminIds },
                     course: course,
                     $or: [
                         { targetUniversity: req.user._id },
@@ -470,7 +470,7 @@ router.post('/', protect, authorize('admin', 'university'), async (req, res) => 
             } else {
                 const targetDate = new Date(req.body.scheduledDate);
                 matchingAdminSlot = await Exam.findOne({
-                    instructor: { $in: adminIds },
+                    createdBy: { $in: adminIds },
                     course: course,
                     scheduledDate: {
                         $gte: new Date(targetDate.getTime() - 120000),
@@ -481,17 +481,34 @@ router.post('/', protect, authorize('admin', 'university'), async (req, res) => 
 
             if (!matchingAdminSlot) {
                 console.warn('[EXAM CREATE] Validation failed for:', req.user.email);
-                const allSlots = await Exam.find({ instructor: { $in: adminIds }, course: course });
+                const allSlots = await Exam.find({ createdBy: { $in: adminIds }, course: course });
                 console.log(`[EXAM VALIDATION] Slots on course:`, allSlots.map(s => ({ id: s._id, date: s.scheduledDate.toISOString() })));
                 return res.status(403).json({ message: 'Unauthorized: No matching Admin-mandated slot found.' });
             }
             console.log(`[EXAM VALIDATION] Match found! Admin Slot ID: ${matchingAdminSlot._id}`);
         }
 
+        // Determine university field (required)
+        let universityId;
+        if (req.user.role === 'university') {
+            universityId = req.user._id;
+        } else if (targetUniversity && targetUniversity !== '') {
+            universityId = targetUniversity;
+        } else {
+            // For admin creating exam, we need a university - use the course's university if available
+            const courseDoc = await Course.findById(course).populate('instructor', 'role _id');
+            if (courseDoc && courseDoc.instructor && courseDoc.instructor.role === 'university') {
+                universityId = courseDoc.instructor._id;
+            } else {
+                return res.status(400).json({ message: 'University is required. Please select a target university.' });
+            }
+        }
+
         const examObj = {
             ...rest,
             course,
-            instructor: req.user._id,
+            createdBy: req.user._id,
+            university: universityId,
             totalPoints: Number(totalPoints || totalMarks || 100),
             passingScore: Number(req.body.passingScore || req.body.passingMarks || 70)
         };
@@ -516,7 +533,7 @@ router.post('/', protect, authorize('admin', 'university'), async (req, res) => 
         savedExam = await savedExam.populate([
             { path: 'course', select: 'title' },
             { path: 'targetUniversity', select: 'name profile' },
-            { path: 'instructor', select: 'name email profile' }
+            { path: 'createdBy', select: 'name email profile' }
         ]);
 
         // Background: Notify students and university

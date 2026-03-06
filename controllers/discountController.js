@@ -37,7 +37,7 @@ const validateDiscount = async (req, res) => {
 // @access  Protected/Admin
 const createDiscount = async (req, res) => {
     try {
-        const { code, type, value, expiryDate } = req.body;
+        const { code, type, value, expiryDate, partner } = req.body;
 
         const discountExists = await Discount.findOne({ code: code.toUpperCase() });
 
@@ -50,6 +50,7 @@ const createDiscount = async (req, res) => {
             type: type || 'percentage',
             value,
             expiryDate: expiryDate || null,
+            partner: partner || null, // Assign to specific partner or leave as global
         });
 
         res.status(201).json(discount);

@@ -1256,39 +1256,63 @@ const getPaymentHistory = async (req, res) => {
     // Calculate pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
+    // Fetch manual payments
+    const manualPayments = await Payment.find(query)
+      .populate('course', 'title thumbnail category')
+      .lean();
+
+    // Mapping manual payments to unified format
+    const mappedManual = manualPayments.map(p => ({
+      transactionId: p._id.toString(),
+      course: {
+        id: p.course?._id,
+        title: p.course?.title,
+        thumbnail: p.course?.thumbnail,
+        category: p.course?.category,
+      },
+      amount: p.amount?.toFixed(2),
+      status: p.status,
+      paymentMethod: p.paymentMethod,
+      initiatedAt: p.createdAt,
+      completedAt: p.reviewedAt,
+      screenshotUrl: p.screenshotUrl,
+      isManual: true
+    }));
+
     // Fetch transactions with pagination
     const transactions = await Transaction.find(query)
       .populate('course', 'title thumbnail category')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    // Get total count
-    const totalItems = await Transaction.countDocuments(query);
-    const totalPages = Math.ceil(totalItems / parseInt(limit));
+      .sort({ createdAt: -1 });
 
     // Format transactions
     const formattedTransactions = transactions.map((txn) => ({
       transactionId: txn.transactionId,
       course: {
-        id: txn.course._id,
-        title: txn.course.title,
-        thumbnail: txn.course.thumbnail,
-        category: txn.course.category,
+        id: txn.course?._id,
+        title: txn.course?.title,
+        thumbnail: txn.course?.thumbnail,
+        category: txn.course?.category,
       },
       amount: txn.finalAmountFormatted,
-      originalAmount: txn.originalAmountFormatted,
-      discountAmount: txn.discountAmountFormatted,
-      status: txn.status,
+      status: txn.status === 'success' ? 'approved' : txn.status === 'failed' ? 'rejected' : 'pending',
       paymentMethod: txn.paymentMethod,
       initiatedAt: txn.initiatedAt,
       completedAt: txn.completedAt,
       receiptUrl: txn.receiptUrl,
     }));
 
+    // Combine and sort
+    let allHistory = [...mappedManual, ...formattedTransactions];
+    allHistory.sort((a, b) => new Date(b.initiatedAt) - new Date(a.initiatedAt));
+
+    // Manual Pagination
+    const totalItems = allHistory.length;
+    const paginatedHistory = allHistory.slice(skip, skip + parseInt(limit));
+    const totalPages = Math.ceil(totalItems / parseInt(limit));
+
     res.status(200).json({
       success: true,
-      transactions: formattedTransactions,
+      transactions: paginatedHistory,
       pagination: {
         currentPage: parseInt(page),
         totalPages,
@@ -1609,6 +1633,289 @@ const retryPayment = async (req, res) => {
   }
 };
 
+const createManualPayment = async (req, res) => {
+  try {
+    const { courseId, amount, paymentMethod, notes } = req.body;
+    const studentId = req.user._id;
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'Please upload payment proof (screenshot)' });
+    }
+
+    const course = await Course.findById(courseId);
+    if (!course) {
+      return res.status(404).json({ success: false, message: 'Course not found' });
+    }
+
+    // Fetch student with partner/university details to ensure correct credit allocation
+    const student = await User.findById(studentId)
+      .populate('registeredBy', 'name profile')
+      .populate('universityId', 'name profile');
+
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    // Determine partner and center for reporting
+    const partnerUser = student.registeredBy || student.universityId;
+    const partner = partnerUser ? partnerUser._id : null;
+
+    // Set center based on partner type
+    let center = 'Direct';
+    if (student.universityId) {
+      center = student.universityId.profile?.universityName || student.universityId.name;
+    } else if (student.registeredBy) {
+      center = student.registeredBy.profile?.partnerName || student.registeredBy.name || 'Partner Network';
+    }
+
+    // Generate a unique transaction ID for tracking
+    const transactionId = `MAN-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+
+    const Payment = require('../models/paymentModel');
+    const payment = await Payment.create({
+      student: studentId,
+      course: courseId,
+      amount: amount || course.price,
+      paymentMethod: paymentMethod || 'bank_transfer',
+      notes: notes,
+      screenshotUrl: `uploads/payments/${req.file.filename}`,
+      status: 'pending',
+      partner: partner,
+      center: center,
+      transactionId: transactionId
+    });
+
+    // Notify admin/finance via WebSocket
+    socketService.sendToRole('admin', 'payment_proof_uploaded', {
+      paymentId: payment._id,
+      studentName: student.name,
+      studentEmail: student.email,
+      courseTitle: course.title,
+      amount: payment.amount,
+      transactionId
+    });
+
+    socketService.sendToRole('finance', 'payment_proof_uploaded', {
+      paymentId: payment._id,
+      studentName: student.name,
+      studentEmail: student.email,
+      courseTitle: course.title,
+      amount: payment.amount,
+      transactionId
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Payment proof submitted successfully. Waiting for finance approval.',
+      transactionId,
+      payment
+    });
+  } catch (error) {
+    console.error('Error in createManualPayment:', error);
+    res.status(500).json({ success: false, message: 'Failed to submit payment proof' });
+  }
+};
+
+/**
+ * @desc    Approve manual payment proof
+ * @route   PUT /api/payment/:id/approve
+ * @access  Private (Admin, Finance)
+ */
+const approvePayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const reviewerId = req.user._id;
+
+    const Payment = require('../models/paymentModel');
+    const payment = await Payment.findById(id)
+      .populate('student', 'name email universityId')
+      .populate('course', 'title');
+
+    if (!payment) {
+      return res.status(404).json({ success: false, message: 'Payment not found' });
+    }
+
+    if (payment.status !== 'pending') {
+      return res.status(400).json({ success: false, message: 'Payment already reviewed' });
+    }
+
+    // Update payment status
+    payment.status = 'approved';
+    payment.reviewedBy = reviewerId;
+    payment.reviewedAt = new Date();
+    await payment.save();
+
+    // Create enrollment
+    let enrollment = await Enrollment.findOne({
+      student: payment.student._id,
+      course: payment.course._id
+    });
+
+    if (!enrollment) {
+      enrollment = await Enrollment.create({
+        student: payment.student._id,
+        course: payment.course._id,
+        enrollmentDate: new Date(),
+        status: 'active',
+        progress: 0,
+        completedModules: 0,
+        totalModules: 0
+      });
+
+      // Create Progress record
+      await Progress.create({
+        user: payment.student._id,
+        course: payment.course._id,
+        completedVideos: [],
+        completedExercises: [],
+        projectSubmissions: [],
+        isCompleted: false
+      });
+
+      payment.enrollment = enrollment._id;
+      await payment.save();
+    } else {
+      enrollment.status = 'active';
+      await enrollment.save();
+    }
+
+    // Notify student via WebSocket
+    socketService.sendToUser(payment.student._id, 'payment_approved', {
+      paymentId: payment._id,
+      courseTitle: payment.course.title,
+      amount: payment.amount,
+      transactionId: payment.transactionId
+    });
+
+    // Send email notification
+    try {
+      await sendEmail({
+        to: payment.student.email,
+        subject: 'Payment Approved - Course Enrollment Activated',
+        html: `
+          <h2>Payment Approved!</h2>
+          <p>Dear ${payment.student.name},</p>
+          <p>Your payment proof has been approved and your enrollment for <strong>${payment.course.title}</strong> is now active.</p>
+          <p><strong>Transaction ID:</strong> ${payment.transactionId}</p>
+          <p><strong>Amount:</strong> ₹${payment.amount}</p>
+          <p>You can now access the course content from your dashboard.</p>
+          <p>Thank you for choosing SkillDad!</p>
+        `
+      });
+    } catch (emailError) {
+      console.error('Error sending approval email:', emailError);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Payment approved and enrollment activated',
+      payment
+    });
+  } catch (error) {
+    console.error('Error approving payment:', error);
+    res.status(500).json({ success: false, message: 'Failed to approve payment' });
+  }
+};
+
+/**
+ * @desc    Reject manual payment proof
+ * @route   PUT /api/payment/:id/reject
+ * @access  Private (Admin, Finance)
+ */
+const rejectPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    const reviewerId = req.user._id;
+
+    if (!reason) {
+      return res.status(400).json({ success: false, message: 'Rejection reason is required' });
+    }
+
+    const Payment = require('../models/paymentModel');
+    const payment = await Payment.findById(id)
+      .populate('student', 'name email')
+      .populate('course', 'title');
+
+    if (!payment) {
+      return res.status(404).json({ success: false, message: 'Payment not found' });
+    }
+
+    if (payment.status !== 'pending') {
+      return res.status(400).json({ success: false, message: 'Payment already reviewed' });
+    }
+
+    // Update payment status
+    payment.status = 'rejected';
+    payment.reviewedBy = reviewerId;
+    payment.reviewedAt = new Date();
+    payment.notes = payment.notes ? `${payment.notes}\n\nRejection Reason: ${reason}` : `Rejection Reason: ${reason}`;
+    await payment.save();
+
+    // Notify student via WebSocket
+    socketService.sendToUser(payment.student._id, 'payment_rejected', {
+      paymentId: payment._id,
+      courseTitle: payment.course.title,
+      amount: payment.amount,
+      transactionId: payment.transactionId,
+      reason
+    });
+
+    // Send email notification
+    try {
+      await sendEmail({
+        to: payment.student.email,
+        subject: 'Payment Proof Rejected - Action Required',
+        html: `
+          <h2>Payment Proof Rejected</h2>
+          <p>Dear ${payment.student.name},</p>
+          <p>Unfortunately, your payment proof for <strong>${payment.course.title}</strong> has been rejected.</p>
+          <p><strong>Transaction ID:</strong> ${payment.transactionId}</p>
+          <p><strong>Amount:</strong> ₹${payment.amount}</p>
+          <p><strong>Reason:</strong> ${reason}</p>
+          <p>Please submit a new payment proof with the correct information or contact support for assistance.</p>
+          <p>Thank you for your understanding.</p>
+        `
+      });
+    } catch (emailError) {
+      console.error('Error sending rejection email:', emailError);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Payment rejected',
+      payment
+    });
+  } catch (error) {
+    console.error('Error rejecting payment:', error);
+    res.status(500).json({ success: false, message: 'Failed to reject payment' });
+  }
+};
+
+/**
+ * @desc    Get pending payment proofs for admin/finance review
+ * @route   GET /api/payment/pending-proofs
+ * @access  Private (Admin, Finance)
+ */
+const getPendingProofs = async (req, res) => {
+  try {
+    const Payment = require('../models/paymentModel');
+    const pendingPayments = await Payment.find({ status: 'pending' })
+      .populate('student', 'name email')
+      .populate('course', 'title thumbnail')
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      count: pendingPayments.length,
+      payments: pendingPayments
+    });
+  } catch (error) {
+    console.error('Error fetching pending proofs:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch pending proofs' });
+  }
+};
+
 module.exports = {
   initiatePayment,
   handleCallback,
@@ -1617,4 +1924,8 @@ module.exports = {
   getPaymentHistory,
   processRefund,
   retryPayment,
+  createManualPayment,
+  approvePayment,
+  rejectPayment,
+  getPendingProofs
 };

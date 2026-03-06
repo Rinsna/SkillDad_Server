@@ -5,10 +5,11 @@ class SocketService {
     constructor() {
         this.io = null;
         this.connectedUsers = new Map(); // userId -> socketId
+        this.redisAdapter = null;
     }
 
     init(server) {
-        this.io = socketIo(server, {
+        const socketOptions = {
             cors: {
                 origin: function (origin, callback) {
                     // Allow requests with no origin (mobile apps, server-to-server)
@@ -39,9 +40,22 @@ class SocketService {
                 methods: ['GET', 'POST'],
                 credentials: true,
                 allowedHeaders: ['Content-Type', 'Authorization']
-            }
-        });
+            },
+            // Connection pooling and performance settings
+            pingTimeout: 60000, // 60 seconds
+            pingInterval: 25000, // 25 seconds
+            upgradeTimeout: 10000, // 10 seconds
+            maxHttpBufferSize: 1e6, // 1MB
+            transports: ['websocket', 'polling'],
+            allowUpgrades: true
+        };
 
+        this.io = socketIo(server, socketOptions);
+
+        // Configure Redis adapter for horizontal scaling if Redis is available
+        this.setupRedisAdapter();
+
+        // Authentication middleware
         this.io.use((socket, next) => {
             const token = socket.handshake.auth.token;
             if (!token) return next(new Error('Authentication error'));
@@ -64,7 +78,58 @@ class SocketService {
                 console.log(`[Socket] User disconnected: ${socket.userId}`);
                 this.connectedUsers.delete(socket.userId);
             });
+
+            // Handle connection errors
+            socket.on('error', (error) => {
+                console.error(`[Socket] Error for user ${socket.userId}:`, error);
+            });
         });
+
+        console.log('[Socket.IO] Socket.IO server initialized');
+    }
+
+    /**
+     * Setup Redis adapter for horizontal scaling
+     * Falls back to default adapter if Redis is not available
+     */
+    setupRedisAdapter() {
+        try {
+            // Only setup Redis adapter if REDIS_URL is configured
+            if (process.env.REDIS_URL) {
+                const { createAdapter } = require('@socket.io/redis-adapter');
+                const { createClient } = require('redis');
+
+                // Create Redis pub/sub clients
+                const pubClient = createClient({ url: process.env.REDIS_URL });
+                const subClient = pubClient.duplicate();
+
+                // Handle Redis connection errors
+                pubClient.on('error', (err) => {
+                    console.error('[Socket.IO] Redis pub client error:', err.message);
+                });
+
+                subClient.on('error', (err) => {
+                    console.error('[Socket.IO] Redis sub client error:', err.message);
+                });
+
+                // Connect clients and setup adapter
+                Promise.all([pubClient.connect(), subClient.connect()])
+                    .then(() => {
+                        this.io.adapter(createAdapter(pubClient, subClient));
+                        this.redisAdapter = { pubClient, subClient };
+                        console.log('[Socket.IO] Redis adapter configured for horizontal scaling');
+                    })
+                    .catch((err) => {
+                        console.error('[Socket.IO] Failed to setup Redis adapter:', err.message);
+                        console.log('[Socket.IO] Using default in-memory adapter');
+                    });
+            } else {
+                console.log('[Socket.IO] Redis not configured, using default in-memory adapter');
+            }
+        } catch (error) {
+            console.error('[Socket.IO] Error setting up Redis adapter:', error.message);
+            console.log('[Socket.IO] Using default in-memory adapter');
+        }
     }
 
     /**
@@ -119,11 +184,59 @@ class SocketService {
                     email: user.email,
                     role: user.role,
                     isVerified: user.isVerified,
+                    discountRate: user.discountRate || 0,
                     createdAt: user.createdAt
                 },
                 timestamp: new Date()
             });
         }
+    }
+
+    /**
+     * Get connection statistics
+     */
+    getStats() {
+        if (!this.io) {
+            return {
+                connected: 0,
+                rooms: 0,
+                adapter: 'not initialized'
+            };
+        }
+
+        return {
+            connected: this.connectedUsers.size,
+            rooms: this.io.sockets.adapter.rooms.size,
+            adapter: this.redisAdapter ? 'redis' : 'memory',
+            sockets: this.io.sockets.sockets.size
+        };
+    }
+
+    /**
+     * Cleanup and close connections
+     */
+    async cleanup() {
+        console.log('[Socket.IO] Cleaning up connections...');
+        
+        if (this.io) {
+            // Close all socket connections
+            this.io.close();
+            console.log('[Socket.IO] All socket connections closed');
+        }
+
+        // Close Redis connections if using Redis adapter
+        if (this.redisAdapter) {
+            try {
+                await this.redisAdapter.pubClient.quit();
+                await this.redisAdapter.subClient.quit();
+                console.log('[Socket.IO] Redis adapter connections closed');
+            } catch (error) {
+                console.error('[Socket.IO] Error closing Redis connections:', error);
+            }
+        }
+
+        this.connectedUsers.clear();
+        console.log('[Socket.IO] Cleanup complete');
     }
 }
 

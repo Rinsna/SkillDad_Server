@@ -112,10 +112,12 @@ const getExamResults = asyncHandler(async (req, res) => {
     throw new Error('Not authorized to view results for this exam');
   }
   
-  // 2. Fetch all results for exam
+  // 2. Fetch all results for exam with selective population
   const results = await Result.find({ exam: examId })
-    .populate('student', 'name email')
-    .sort({ rank: 1 });
+    .populate('student', 'name email') // Only populate name and email
+    .select('student obtainedMarks totalMarks percentage grade isPassed rank') // Select only needed fields
+    .sort({ rank: 1 })
+    .lean(); // Use lean() for better performance
   
   // 3. Calculate statistics using aggregation
   const stats = await Result.aggregate([
@@ -165,15 +167,16 @@ const getExamResults = asyncHandler(async (req, res) => {
 const getStudentResult = asyncHandler(async (req, res) => {
   const { examId, studentId } = req.params;
   
-  // 1. Fetch result with exam and submission details
+  // 1. Fetch result with exam and submission details using selective population
   const result = await Result.findOne({ exam: examId, student: studentId })
-    .populate('exam', 'title totalMarks passingScore examType university')
-    .populate('student', 'name email')
+    .populate('exam', 'title totalMarks passingScore examType university') // Only needed exam fields
+    .populate('student', 'name email') // Only name and email
     .populate({
       path: 'submission',
+      select: 'answers submittedAt timeSpent answerSheetUrl', // Only needed submission fields
       populate: {
         path: 'answers.question',
-        select: 'questionText questionType options marks'
+        select: 'questionText questionType options marks order' // Only needed question fields
       }
     });
   

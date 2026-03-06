@@ -196,7 +196,7 @@ describe('Auto-Grading Service', () => {
           { text: 'Correct', isCorrect: true },
         ],
         marks: 5,
-        negativeMarks: 10, // Higher than positive marks
+        negativeMarks: 4, // High but less than positive marks
         order: 1,
       });
 

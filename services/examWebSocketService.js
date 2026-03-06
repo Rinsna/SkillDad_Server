@@ -68,9 +68,21 @@ class ExamWebSocketService {
         // Clean up exam room memberships for this socket
         this.examRooms.forEach((students, examId) => {
           if (students.has(socket.userId)) {
+            students.delete(socket.userId);
             console.log(`[ExamWebSocket] User ${socket.userId} disconnected from exam ${examId}`);
+            
+            // Clean up empty rooms
+            if (students.size === 0) {
+              this.examRooms.delete(examId);
+              console.log(`[ExamWebSocket] Exam room ${examId} is now empty, removed from tracking`);
+            }
           }
         });
+      });
+
+      // Handle connection errors
+      socket.on('error', (error) => {
+        console.error(`[ExamWebSocket] Socket error for user ${socket.userId}:`, error);
       });
     });
 

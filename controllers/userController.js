@@ -125,27 +125,33 @@ const registerUser = async (req, res) => {
 // @access  Public
 const loginUser = async (req, res) => {
     try {
-        const { email, password } = req.body;
+        let { email, password } = req.body;
 
-        console.log('Login attempt received:', { email });
+        if (email) email = email.trim().toLowerCase();
+
+        console.log('--- DEBUG LOGIN START ---');
+        console.log('Received Email:', email);
+        console.log('Received Password Length:', password?.length);
 
         if (!email || !password) {
-            console.log('Login failed: Missing email or password');
+            console.log('DEBUG: Missing email or password');
             return res.status(400).json({ message: 'Please provide email and password' });
         }
 
         // Check for user email
-        console.log('Searching for user...');
         const user = await User.findOne({ email });
 
         if (!user) {
-            console.log('Login failed: User not found -', email);
+            console.log('DEBUG: User NOT found in DB:', email);
             return res.status(400).json({ message: 'Invalid credentials' });
         }
 
-        console.log('User found, matching password...');
+        console.log('DEBUG: User found in DB. Role:', user.role);
+        console.log('DEBUG: Hashed password in DB type:', typeof user.password);
+
         const isMatch = await user.matchPassword(password);
-        console.log('Password match result:', isMatch);
+        console.log('DEBUG: Password match result:', isMatch);
+        console.log('--- DEBUG LOGIN END ---');
 
         if (isMatch) {
             console.log('Login successful for:', email);

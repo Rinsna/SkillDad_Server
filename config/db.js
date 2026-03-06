@@ -1,5 +1,8 @@
 const mongoose = require('mongoose');
 
+// Set mongoose options
+mongoose.set('strictPopulate', false); // Allow populate to work even if path doesn't exist in schema
+
 const connectDB = async () => {
     try {
         const conn = await mongoose.connect(process.env.MONGO_URI, {

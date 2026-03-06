@@ -67,6 +67,26 @@ const examSubmissionNewSchema = new mongoose.Schema({
   // Answers for online exams
   answers: [answerSchema],
 
+  // Answer change tracking for exam integrity
+  answerChanges: [{
+    questionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Question'
+    },
+    previousAnswer: {
+      selectedOption: Number,
+      textAnswer: String
+    },
+    newAnswer: {
+      selectedOption: Number,
+      textAnswer: String
+    },
+    changedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+
   // PDF-based exam answer sheet
   answerSheetUrl: {
     type: String
@@ -105,11 +125,10 @@ const examSubmissionNewSchema = new mongoose.Schema({
 });
 
 // Validation
-examSubmissionNewSchema.pre('validate', function (next) {
+examSubmissionNewSchema.pre('validate', function () {
   // Validate submittedAt is after startedAt
   if (this.submittedAt && this.startedAt && this.submittedAt < this.startedAt) {
-    next(new Error('submittedAt must be after startedAt'));
-    return;
+    this.invalidate('submittedAt', 'submittedAt must be after startedAt');
   }
 
   // Calculate timeSpent if submittedAt is set
@@ -121,8 +140,6 @@ examSubmissionNewSchema.pre('validate', function (next) {
   if (this.totalMarks > 0 && this.obtainedMarks >= 0) {
     this.percentage = (this.obtainedMarks / this.totalMarks) * 100;
   }
-
-  next();
 });
 
 // Compound index for unique student-exam combination
@@ -131,6 +148,7 @@ examSubmissionNewSchema.index({ exam: 1, student: 1 }, { unique: true });
 // Additional indexes for performance
 examSubmissionNewSchema.index({ exam: 1, status: 1 });
 examSubmissionNewSchema.index({ student: 1, status: 1 });
+examSubmissionNewSchema.index({ student: 1, createdAt: -1 }); // For student submission history
 
 const ExamSubmissionNew = mongoose.models.ExamSubmissionNew || mongoose.model('ExamSubmissionNew', examSubmissionNewSchema);
 

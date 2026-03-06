@@ -27,8 +27,7 @@ if (ZOOM_MOCK_MODE) {
   console.log('[Zoom] ⚠️  MOCK MODE ENABLED - Auto-falling back to mock Zoom implementations because real credentials are not fully configured');
   const mockZoomUtils = require('./mockZoomUtils');
   module.exports = mockZoomUtils;
-  return;
-}
+} else {
 
 /**
  * Encryption Configuration
@@ -803,3 +802,4 @@ module.exports = {
   queueRateLimitedRequest,
   processRateLimitQueue
 };
+}

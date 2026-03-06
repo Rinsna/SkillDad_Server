@@ -101,6 +101,12 @@ userSchema.methods.getResetPasswordToken = function () {
     return resetToken;
 };
 
+// Performance Indexes
+userSchema.index({ role: 1 });
+userSchema.index({ universityId: 1 });
+userSchema.index({ registeredBy: 1 });
+userSchema.index({ partnerCode: 1 });
+
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 
 module.exports = User;

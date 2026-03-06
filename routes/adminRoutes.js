@@ -18,6 +18,7 @@ const {
     getStudentEnrollments,
     updateStudent,
     deleteStudent,
+    deleteUser,
     getPartnerLogos,
     createPartnerLogo,
     updatePartnerLogo,
@@ -28,7 +29,9 @@ const {
     deleteDirector,
     getUniversities,
     assignCoursesToUniversity,
-    getUniversityDetail
+    getUniversityDetail,
+    adminEnrollStudent,
+    adminUnenrollStudent
 } = require('../controllers/adminController');
 const { protect } = require('../middleware/authMiddleware');
 
@@ -80,11 +83,14 @@ router.put('/users/:id/role', protect, checkAdmin, updateUserRole);
 router.put('/users/:id/verify', protect, checkAdmin, verifyUser);
 router.put('/users/:id/grant-permission', protect, checkAdmin, grantPermission);
 router.put('/users/:id/revoke-permission', protect, checkAdmin, revokePermission);
+router.delete('/users/:id', protect, checkAdmin, deleteUser);
 
 // Student Management Routes
 router.get('/students', protect, checkAdmin, getAllStudents);
 router.get('/students/:id/documents', protect, checkAdmin, getStudentDocuments);
 router.get('/students/:id/enrollments', protect, checkAdmin, getStudentEnrollments);
+router.post('/students/:id/enroll', protect, checkAdmin, adminEnrollStudent);
+router.delete('/students/:id/enroll/:courseId', protect, checkAdmin, adminUnenrollStudent);
 router.put('/students/:id', protect, checkAdmin, updateStudent);
 router.delete('/students/:id', protect, checkAdmin, deleteStudent);
 

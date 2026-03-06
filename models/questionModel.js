@@ -64,29 +64,24 @@ const questionSchema = new mongoose.Schema({
 });
 
 // Validation for MCQ questions
-questionSchema.pre('validate', function (next) {
+questionSchema.pre('validate', function () {
   if (this.questionType === 'mcq') {
     // MCQ must have at least 2 options
     if (!this.options || this.options.length < 2) {
-      next(new Error('MCQ questions must have at least 2 options'));
-      return;
+      this.invalidate('options', 'MCQ questions must have at least 2 options');
     }
 
     // Exactly one option must be marked as correct
     const correctOptions = this.options.filter(opt => opt.isCorrect);
     if (correctOptions.length !== 1) {
-      next(new Error('MCQ questions must have exactly one correct option'));
-      return;
+      this.invalidate('options', 'MCQ questions must have exactly one correct option');
     }
   }
 
   // Validate negative marks are less than positive marks
   if (this.negativeMarks >= this.marks) {
-    next(new Error('negativeMarks must be less than marks'));
-    return;
+    this.invalidate('negativeMarks', 'negativeMarks must be less than marks');
   }
-
-  next();
 });
 
 // Compound index for unique order within exam

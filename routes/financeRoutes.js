@@ -7,7 +7,8 @@ const {
     getEnrollmentSummaries,
     approvePayout,
     getPayoutHistory,
-    exportReport
+    exportReport,
+    getFinancePartners
 } = require('../controllers/financeController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 
@@ -33,6 +34,7 @@ router.get('/stats', protect, checkFinanceOrAdmin, getFinanceStats);
 router.get('/payments', protect, checkFinanceOrAdmin, getStudentPayments);
 router.put('/payments/:id', protect, checkFinanceOrAdmin, updatePaymentStatus);
 router.get('/enrollment-summaries', protect, checkFinanceOrAdmin, getEnrollmentSummaries);
+router.get('/partners', protect, checkFinanceOrAdmin, getFinancePartners);
 
 // Payout Management
 router.get('/payouts', protect, checkFinanceOrAdmin, getPayoutHistory);

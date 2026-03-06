@@ -119,34 +119,30 @@ const examSchema = new mongoose.Schema({
 });
 
 // Validation: scheduledEndTime must be after scheduledStartTime
-examSchema.pre('validate', function (next) {
+examSchema.pre('validate', function () {
   if (this.scheduledEndTime && this.scheduledStartTime) {
     if (this.scheduledEndTime <= this.scheduledStartTime) {
-      next(new Error('scheduledEndTime must be after scheduledStartTime'));
-      return;
+      this.invalidate('scheduledEndTime', 'scheduledEndTime must be after scheduledStartTime');
     }
 
     // Validate duration fits within time window
     const timeWindowMinutes = (this.scheduledEndTime - this.scheduledStartTime) / (1000 * 60);
     if (this.duration > timeWindowMinutes) {
-      next(new Error('duration must fit within the time window between start and end times'));
-      return;
+      this.invalidate('duration', 'duration must fit within the time window between start and end times');
     }
   }
 
   // Validate questionPaperUrl is required for pdf-based exams
   if (this.examType === 'pdf-based' && !this.questionPaperUrl && !this.isNew) {
-    next(new Error('questionPaperUrl is required for pdf-based exams'));
-    return;
+    this.invalidate('questionPaperUrl', 'questionPaperUrl is required for pdf-based exams');
   }
-
-  next();
 });
 
 // Compound indexes for performance
 examSchema.index({ course: 1, status: 1 });
 examSchema.index({ university: 1, status: 1 });
 examSchema.index({ scheduledStartTime: 1, status: 1 });
+examSchema.index({ status: 1, scheduledEndTime: 1 }); // For finding exams by status and end time
 
 const Exam = mongoose.models.Exam || mongoose.model('Exam', examSchema);
 

@@ -533,6 +533,8 @@ const updateStudent = async (req, res) => {
 
 // @desc    Delete student
 // @route   DELETE /api/admin/students/:id
+// @desc    Delete student
+// @route   DELETE /api/admin/students/:id
 // @access  Private (Admin)
 const deleteStudent = async (req, res) => {
     try {
@@ -549,6 +551,34 @@ const deleteStudent = async (req, res) => {
         await User.deleteOne({ _id: req.params.id });
 
         res.json({ message: 'Student deleted successfully' });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// @desc    Delete any user
+// @route   DELETE /api/admin/users/:id
+// @access  Private (Admin)
+const deleteUser = async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id);
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // Prevent deleting yourself
+        if (user._id.toString() === req.user._id.toString()) {
+            return res.status(400).json({ message: 'You cannot delete your own account' });
+        }
+
+        await User.deleteOne({ _id: req.params.id });
+
+        // Notify via WebSocket
+        const socketService = require('../services/SocketService');
+        socketService.notifyUserListUpdate('deleted', user);
+
+        res.json({ message: 'User deleted successfully', user: { _id: user._id, name: user.name, email: user.email } });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -728,10 +758,10 @@ async function inviteUser(req, res) {
         const normalizedEmail = email ? email.toLowerCase().trim() : '';
         const normalizedName = name ? name.trim() : '';
 
-        console.log('[inviteUser] Validation check:', { 
-            name: !!normalizedName, 
-            email: !!normalizedEmail, 
-            password: !!password, 
+        console.log('[inviteUser] Validation check:', {
+            name: !!normalizedName,
+            email: !!normalizedEmail,
+            password: !!password,
             role: !!role,
             nameValue: normalizedName,
             emailValue: normalizedEmail,
@@ -755,11 +785,11 @@ async function inviteUser(req, res) {
         }
 
         // Create the user
-        console.log('[inviteUser] Creating user with data:', { 
-            name: normalizedName, 
-            email: normalizedEmail, 
-            role, 
-            universityId: universityId || undefined 
+        console.log('[inviteUser] Creating user with data:', {
+            name: normalizedName,
+            email: normalizedEmail,
+            role,
+            universityId: universityId || undefined
         });
         const user = await User.create({
             name: normalizedName,
@@ -786,18 +816,18 @@ async function inviteUser(req, res) {
             } else if (role === 'instructor') {
                 emailSubject = 'Welcome to SkillDad - Instructor Account Created';
             }
-            
+
             console.log('[inviteUser] Attempting to send email to:', user.email);
             console.log('[inviteUser] Email subject:', emailSubject);
             console.log('[inviteUser] CLIENT_URL:', process.env.CLIENT_URL);
-            
+
             await sendEmail({
                 email: user.email,
                 subject: emailSubject,
                 message: `Hello ${user.name},\n\nWelcome to SkillDad! You have been invited to join our platform as a ${user.role}.\n\nYour login credentials:\nUsername (Email): ${user.email}\nTemporary Password: ${password}\n\nPlease login and change your password immediately.\n\nLogin URL: ${process.env.CLIENT_URL || 'http://localhost:5173'}/login`,
                 html: emailTemplates.invitation(user.name, user.role, user.email, password)
             });
-            
+
             console.log('[inviteUser] Email sent successfully to:', user.email);
         } catch (emailError) {
             console.error('[inviteUser] Failed to send invitation email:', emailError);
@@ -948,6 +978,145 @@ async function getUniversityDetail(req, res) {
     }
 }
 
+// @desc    Admin enrolls a student in a course for free (no payment required)
+// @route   POST /api/admin/students/:id/enroll
+// @access  Private (Admin)
+const adminEnrollStudent = async (req, res) => {
+    try {
+        const { courseId, universityId, note } = req.body;
+        const studentId = req.params.id;
+
+        if (!courseId) {
+            return res.status(400).json({ message: 'Course ID is required' });
+        }
+
+        const student = await User.findById(studentId);
+        if (!student || student.role !== 'student') {
+            return res.status(404).json({ message: 'Student not found' });
+        }
+
+        const course = await Course.findById(courseId);
+        if (!course) {
+            return res.status(404).json({ message: 'Course not found' });
+        }
+
+        // Check if already enrolled
+        const existingEnrollment = await Enrollment.findOne({ student: studentId, course: courseId });
+        if (existingEnrollment) {
+            return res.status(400).json({ message: `${student.name} is already enrolled in ${course.title}` });
+        }
+
+        // If universityId is provided, update student's universityId
+        if (universityId) {
+            const university = await User.findById(universityId);
+            if (!university || university.role !== 'university') {
+                return res.status(400).json({ message: 'Invalid university ID' });
+            }
+            student.universityId = universityId;
+            await student.save();
+        }
+
+        // Create enrollment
+        const enrollment = await Enrollment.create({
+            student: studentId,
+            course: courseId,
+            status: 'active',
+            progress: 0,
+            enrollmentDate: new Date()
+        });
+
+        // Create a free Payment record so it appears in Finance Dashboard
+        const Payment = require('../models/paymentModel');
+        const txnId = `ADM-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+
+        // Determine partner/center from student or provided universityId
+        let partnerId = null;
+        let centerName = 'Admin Enrolled';
+        
+        if (universityId) {
+            // Use the provided university
+            partnerId = universityId;
+            const uniUser = await User.findById(universityId).select('name profile');
+            if (uniUser) {
+                centerName = uniUser.profile?.universityName || uniUser.name;
+            }
+        } else if (student.registeredBy) {
+            partnerId = student.registeredBy;
+            const partnerUser = await User.findById(partnerId).select('name profile');
+            if (partnerUser) {
+                centerName = partnerUser.profile?.partnerName || partnerUser.profile?.universityName || partnerUser.name;
+            }
+        } else if (student.universityId) {
+            partnerId = student.universityId;
+            const uniUser = await User.findById(partnerId).select('name profile');
+            if (uniUser) {
+                centerName = uniUser.profile?.universityName || uniUser.name;
+            }
+        }
+
+        await Payment.create({
+            student: studentId,
+            course: courseId,
+            amount: 0,
+            paymentMethod: 'admin_enrolled',
+            transactionId: txnId,
+            status: 'approved',
+            partner: partnerId || undefined,
+            center: centerName,
+            notes: note || `Admin free enrollment by ${req.user?.name || 'Admin'}`,
+            reviewedBy: req.user?._id,
+            reviewedAt: new Date()
+        });
+
+        // Notify via socket
+        try {
+            socketService.emitToUser(studentId.toString(), 'ENROLLMENT_CREATED', {
+                courseId,
+                courseTitle: course.title,
+                message: `You have been enrolled in ${course.title} by admin`
+            });
+        } catch (e) { /* socket optional */ }
+
+        res.status(201).json({
+            message: `${student.name} successfully enrolled in ${course.title}${universityId ? ' and assigned to university' : ''}`,
+            enrollment,
+            transactionId: txnId
+        });
+    } catch (error) {
+        console.error('[adminEnrollStudent] error:', error);
+        if (error.code === 11000) {
+            return res.status(400).json({ message: 'Student is already enrolled in this course' });
+        }
+        res.status(500).json({ message: error.message || 'Failed to enroll student' });
+    }
+};
+
+// @desc    Admin removes student enrollment from a course
+// @route   DELETE /api/admin/students/:id/enroll/:courseId
+// @access  Private (Admin)
+const adminUnenrollStudent = async (req, res) => {
+    try {
+        const { id: studentId, courseId } = req.params;
+
+        const enrollment = await Enrollment.findOneAndDelete({ student: studentId, course: courseId });
+        if (!enrollment) {
+            return res.status(404).json({ message: 'Enrollment not found' });
+        }
+
+        // Also soft-update the payment record for this admin enrollment
+        const Payment = require('../models/paymentModel');
+        await Payment.findOneAndUpdate(
+            { student: studentId, course: courseId, paymentMethod: 'admin_enrolled' },
+            { status: 'rejected', notes: 'Unenrolled by admin' }
+        );
+
+        res.json({ message: 'Student unenrolled successfully' });
+    } catch (error) {
+        console.error('[adminUnenrollStudent] error:', error);
+        res.status(500).json({ message: error.message || 'Failed to unenroll student' });
+    }
+};
+
 module.exports = {
     updateEntity,
     getGlobalStats,
@@ -965,6 +1134,7 @@ module.exports = {
     getStudentEnrollments,
     updateStudent,
     deleteStudent,
+    deleteUser,
     getPartnerLogos,
     createPartnerLogo,
     updatePartnerLogo,
@@ -976,5 +1146,7 @@ module.exports = {
     inviteUser,
     getUniversities,
     assignCoursesToUniversity,
-    getUniversityDetail
+    getUniversityDetail,
+    adminEnrollStudent,
+    adminUnenrollStudent
 };

@@ -75,7 +75,23 @@ const submitAnswer = asyncHandler(async (req, res) => {
     textAnswer: question.questionType === 'descriptive' ? textAnswer : undefined
   };
 
+  // Track answer changes for exam integrity
+  const examIntegrityService = require('../services/examIntegrityService');
+  
   if (existingAnswerIndex >= 0) {
+    // Log answer change
+    await examIntegrityService.logAnswerChange(
+      submissionId,
+      questionId,
+      submission.answers[existingAnswerIndex],
+      answerData,
+      studentId,
+      req
+    );
+    
+    // Track change in submission
+    examIntegrityService.trackAnswerChange(submission, questionId, answerData);
+    
     submission.answers[existingAnswerIndex] = answerData;
   } else {
     submission.answers.push(answerData);
@@ -312,12 +328,14 @@ const getSubmissionsForExam = asyncHandler(async (req, res) => {
   // 3. Calculate pagination
   const skip = (parseInt(page) - 1) * parseInt(limit);
   
-  // 4. Fetch submissions with pagination
+  // 4. Fetch submissions with pagination and selective population
   const submissions = await ExamSubmissionNew.find(filter)
-    .populate('student', 'name email')
+    .populate('student', 'name email') // Only populate name and email
+    .select('student exam status submittedAt obtainedMarks totalMarks percentage isAutoSubmitted gradedAt') // Select only needed fields
     .sort({ [sortBy]: -1 })
     .skip(skip)
-    .limit(parseInt(limit));
+    .limit(parseInt(limit))
+    .lean(); // Use lean() for better performance
   
   // 5. Get total count for pagination metadata
   const totalCount = await ExamSubmissionNew.countDocuments(filter);
@@ -473,15 +491,15 @@ const getMySubmission = asyncHandler(async (req, res) => {
   const { examId } = req.params;
   const studentId = req.user._id;
   
-  // 1. Fetch submission for requesting student
+  // 1. Fetch submission for requesting student with selective population
   const submission = await ExamSubmissionNew.findOne({
     exam: examId,
     student: studentId
   })
-    .populate('exam', 'title examType totalMarks')
+    .populate('exam', 'title examType totalMarks duration scheduledEndTime') // Only populate needed exam fields
     .populate({
       path: 'answers.question',
-      select: 'questionText questionType options marks negativeMarks'
+      select: 'questionText questionType options marks negativeMarks order' // Only select needed question fields
     });
   
   if (!submission) {

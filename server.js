@@ -3,6 +3,7 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const dotenv = require('dotenv');
 const path = require('path');
+const compression = require('compression');
 
 // Load env vars from the correct path regardless of where it's run from
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -53,6 +54,7 @@ global.BASE_UPLOAD_PATH = uploads.ROOT;
 global.STORAGE_STATUS = { succeeded: uploadsSucceeded, failed: uploadsFailed };
 
 const app = express();
+app.use(compression());
 app.use(cookieParser());
 const server = http.createServer(app);
 
@@ -115,6 +117,7 @@ app.use('/api/enrollment', require('./routes/enrollmentRoutes'));
 app.use('/api/university', require('./routes/universityRoutes'));
 app.use('/api/partner', require('./routes/partnerRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
+app.use('/api/admin/skilldad-universities', require('./routes/skillDadUniversityRoutes'));
 app.use('/api/sessions', require('./routes/liveSessionRoutes'));
 app.use('/api/finance', require('./routes/financeRoutes'));
 app.use('/api/enquiries', require('./routes/enquiryRoutes'));
@@ -140,10 +143,14 @@ app.get('/', (req, res) => {
   res.send('API is running...');
 });
 
-// Health check endpoint with storage status
-app.get('/health', (req, res) => {
+// Health check endpoint with storage and DB status
+app.get('/health', async (req, res) => {
+  const mongoose = require('mongoose');
+  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+
   res.status(200).json({
-    status: 'ok-v3',
+    status: 'ok-v4',
+    database: dbStatus,
     timestamp: new Date().toISOString(),
     storage: global.STORAGE_STATUS || 'UNKNOWN'
   });
