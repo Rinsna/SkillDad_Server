@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const User = require('../models/userModel');
+const { query } = require('../config/postgres');
 
 const protect = async (req, res, next) => {
     let token;
@@ -8,13 +8,16 @@ const protect = async (req, res, next) => {
         try {
             token = req.headers.authorization.split(' ')[1];
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            req.user = await User.findById(decoded.id).select('-password');
-            console.log(`[AUTH PROTECT] Decoded ID: ${decoded.id}, User Found: ${req.user ? req.user.email : 'NULL'}, Role: ${req.user ? req.user.role : 'N/A'}`);
+
+            // PostgreSQL query instead of User.findById
+            const userRes = await query('SELECT id, name, email, role, profile FROM users WHERE id = $1', [decoded.id]);
+            req.user = userRes.rows[0];
 
             if (!req.user) {
                 return res.status(401).json({ message: 'User not found' });
             }
 
+            console.log(`[AUTH PROTECT] Decoded ID: ${decoded.id}, User Found: ${req.user.email}, Role: ${req.user.role}`);
             return next();
         } catch (error) {
             console.error('Auth protection error:', error.message);

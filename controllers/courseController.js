@@ -1,488 +1,138 @@
 const asyncHandler = require('express-async-handler');
-const Course = require('../models/courseModel');
+const { query } = require('../config/postgres');
 
 // @desc    Get all courses (optionally filtered by university)
 // @route   GET /api/courses?university=<userId>
-// @access  Public
 const getCourses = asyncHandler(async (req, res) => {
     try {
-        let filter = { isPublished: true };
+        const universityId = req.query.university;
+        let coursesRes;
 
-        // Filter by university (instructor) if provided
-        if (req.query.university) {
-            filter.instructor = req.query.university;
+        if (universityId) {
+            coursesRes = await query(`
+                SELECT c.*, u.name as instructor_name, u.profile as instructor_profile
+                FROM courses c
+                JOIN users u ON c.instructor_id = u.id
+                WHERE c.is_published = true AND c.instructor_id = $1
+            `, [universityId]);
+        } else {
+            coursesRes = await query(`
+                SELECT c.*, u.name as instructor_name, u.profile as instructor_profile
+                FROM courses c
+                JOIN users u ON c.instructor_id = u.id
+                WHERE c.is_published = true
+            `);
         }
 
-        const courses = await Course.find(filter)
-            .populate({
-                path: 'instructor',
-                select: 'name profile role',
-                options: { strictPopulate: false }
-            })
-            .lean();
-
-        const validCourses = courses.map(course => {
-            return {
-                ...course,
-                title: course.title || 'Untitled Course',
-                description: course.description || 'No description provided',
-                category: course.category || 'General',
-                thumbnail: course.thumbnail || '',
-                price: course.price || 0,
-                instructor: course.instructor || {
-                    name: course.instructorName || 'Academic Facilitator',
-                    profile: { universityName: course.universityName || '' },
-                    role: 'university'
-                },
-                instructorName: course.instructorName || (course.instructor ? course.instructor.name : 'Academic Facilitator'),
-                universityName: course.universityName || (course.instructor?.profile ? course.instructor.profile.universityName : '')
-            };
-        });
+        const validCourses = coursesRes.rows.map(course => ({
+            ...course,
+            _id: course.id,
+            instructor: {
+                name: course.instructor_name,
+                profile: course.instructor_profile,
+                role: 'university'
+            }
+        }));
 
         res.status(200).json(validCourses);
     } catch (error) {
-        console.error('Error in getCourses:', error);
-        res.status(500).json({ message: 'Error fetching courses', error: error.message });
+        console.error('Error in getCourses (PG):', error);
+        res.status(500).json({ message: 'Error fetching courses' });
     }
 });
 
-
 // @desc    Get all courses (Admin/Instructor version)
-// @route   GET /api/admin/courses
-// @access  Private (Admin/Instructor)
 const getAdminCourses = asyncHandler(async (req, res) => {
     try {
-        let filter = {};
-        if (req.user.role !== 'admin') {
-            const User = require('../models/userModel');
-            const user = await User.findById(req.user.id);
-            const assignedCourses = user?.assignedCourses || [];
+        const userId = req.user.id;
+        const userRole = req.user.role?.toLowerCase();
+        let coursesRes;
 
-            filter = {
-                $or: [
-                    { instructor: req.user.id },
-                    { _id: { $in: assignedCourses } }
-                ]
-            };
+        if (userRole === 'admin') {
+            coursesRes = await query(`
+                SELECT c.*, u.name as instructor_name
+                FROM courses c
+                LEFT JOIN users u ON c.instructor_id = u.id
+                ORDER BY c.created_at DESC
+            `);
+        } else {
+            coursesRes = await query(`
+                SELECT c.*, u.name as instructor_name
+                FROM courses c
+                LEFT JOIN users u ON c.instructor_id = u.id
+                WHERE c.instructor_id = $1
+                ORDER BY c.created_at DESC
+            `, [userId]);
         }
-        const courses = await Course.find(filter)
-            .populate({
-                path: 'instructor',
-                select: 'name profile role',
-                options: { strictPopulate: false }
-            })
-            .sort('-createdAt')
-            .lean();
 
-        // Handle missing instructors
-        const validCourses = courses.map(course => {
-            if (!course.instructor) {
-                course.instructor = {
-                    name: course.instructorName || 'Unknown Instructor',
-                    profile: {},
-                    role: 'university'
-                };
-            }
-            return course;
-        });
-
-        res.status(200).json(validCourses);
+        res.status(200).json(coursesRes.rows.map(c => ({ ...c, _id: c.id })));
     } catch (error) {
-        console.error('Error in getAdminCourses:', error);
-        console.error('Error stack:', error.stack);
-        res.status(500).json({ message: 'Error fetching admin courses', error: error.message });
+        res.status(500).json({ message: error.message });
     }
 });
 
 // @desc    Get single course
-// @route   GET /api/courses/:id
-// @access  Public
 const getCourse = asyncHandler(async (req, res) => {
-    // Handle frontend fallback courses safely
-    if (req.params.id === 'mock1') {
-        return res.status(200).json({
-            _id: 'mock1',
-            title: 'Complete Web Development Bootcamp 2024',
-            description: 'Master HTML, CSS, JavaScript, React, Node.js and more.',
-            thumbnail: 'https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&q=80&w=800',
-            category: 'Web Development',
-            price: 99,
-            instructor: { name: 'Dr. Angela Yu', role: 'university', profile: { universityName: 'London App Brewery' } },
-            modules: []
-        });
-    }
+    const { id } = req.params;
 
-    if (req.params.id === 'mock2') {
-        return res.status(200).json({
-            _id: 'mock2',
-            title: 'Advanced AI & Machine Learning',
-            description: 'Learn deep learning, neural networks, and computer vision.',
-            thumbnail: 'https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&q=80&w=800',
-            category: 'Artificial Intelligence',
-            price: 149,
-            instructor: { name: 'Prof. Andrew Ng', role: 'university', profile: { universityName: 'Stanford Online' } },
-            modules: []
-        });
-    }
+    // PG Query
+    const courseRes = await query(`
+        SELECT c.*, u.name as instructor_name, u.profile as instructor_profile
+        FROM courses c
+        JOIN users u ON c.instructor_id = u.id
+        WHERE c.id = $1
+    `, [id]);
 
-    // Protect against severe DB CastErrors for invalid IDs
-    if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
-        res.status(404);
-        throw new Error('Course not found');
-    }
-
-    const course = await Course.findById(req.params.id)
-        .populate({
-            path: 'instructor',
-            select: 'name profile role',
-            options: { strictPopulate: false }
-        })
-        .lean();
-
+    const course = courseRes.rows[0];
     if (!course) {
         res.status(404);
         throw new Error('Course not found');
     }
 
-    // Handle missing instructor
-    if (!course.instructor) {
-        course.instructor = {
-            name: course.instructorName || 'Unknown Instructor',
-            profile: {},
+    res.status(200).json({
+        ...course,
+        _id: course.id,
+        instructor: {
+            name: course.instructor_name,
+            profile: course.instructor_profile,
             role: 'university'
-        };
-    }
-
-    res.status(200).json(course);
+        }
+    });
 });
 
 // @desc    Create new course
-// @route   POST /api/courses
-// @access  Private (Admin/Instructor)
 const createCourse = asyncHandler(async (req, res) => {
-    if (req.user.role !== 'admin' && req.user.role !== 'university') {
-        res.status(401);
-        throw new Error('Not authorized to create courses');
-    }
+    const { title, description, category, price, isPublished, instructorId } = req.body;
+    const finalInstructorId = req.user.role === 'admin' ? (instructorId || req.user.id) : req.user.id;
+    const newId = `course_${Date.now()}`;
 
-    const { instructor, instructorName, universityName, title, description, category, price, isPublished } = req.body;
+    await query(`
+        INSERT INTO courses (id, title, description, category, price, is_published, instructor_id, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+    `, [newId, title, description, category, price || 0, isPublished || false, finalInstructorId]);
 
-    const course = await Course.create({
-        instructor: (req.user.role === 'admin' && instructor) ? instructor : req.user.id,
-        instructorName,
-        universityName,
-        title: title || 'Untitled Course',
-        description: description || 'No description',
-        category: category || 'General',
-        price: price || 0,
-        isPublished: isPublished !== undefined ? isPublished : false,
-    });
-
-    res.status(201).json(course);
+    const saved = await query('SELECT * FROM courses WHERE id = $1', [newId]);
+    res.status(201).json({ ...saved.rows[0], _id: newId });
 });
 
 // @desc    Update course
-// @route   PUT /api/courses/:id
-// @access  Private (Admin/Instructor)
 const updateCourse = asyncHandler(async (req, res) => {
-    const course = await Course.findById(req.params.id);
+    const { id } = req.params;
+    const { title, description, category, price, isPublished } = req.body;
 
-    if (!course) {
-        res.status(404);
-        throw new Error('Course not found');
-    }
+    await query(`
+        UPDATE courses 
+        SET title = COALESCE($1, title),
+            description = COALESCE($2, description),
+            category = COALESCE($3, category),
+            price = COALESCE($4, price),
+            is_published = COALESCE($5, is_published),
+            updated_at = NOW()
+        WHERE id = $6
+    `, [title, description, category, price, isPublished, id]);
 
-    // Check ownership or admin
-    if (course.instructor && course.instructor.toString() !== req.user.id && req.user.role !== 'admin') {
-        res.status(401);
-        throw new Error('Not authorized to update this course');
-    }
-
-    // Extract only the fields we want to allow updating
-    const {
-        title,
-        description,
-        category,
-        price,
-        instructorName,
-        universityName,
-        isPublished,
-        thumbnail,
-        instructor
-    } = req.body;
-
-    if (req.user.role === 'admin' && instructor) {
-        course.instructor = instructor;
-    }
-
-    if (title) course.title = title;
-    if (description) course.description = description;
-    if (category) course.category = category;
-    if (price !== undefined) course.price = price;
-    if (instructorName !== undefined) course.instructorName = instructorName;
-    if (universityName !== undefined) course.universityName = universityName;
-    if (isPublished !== undefined) course.isPublished = isPublished;
-    if (thumbnail) course.thumbnail = thumbnail;
-
-    const updatedCourse = await course.save();
-
-    res.status(200).json(updatedCourse);
-});
-
-// @desc    Delete course
-// @route   DELETE /api/courses/:id
-// @access  Private (Admin/Instructor)
-const deleteCourse = asyncHandler(async (req, res) => {
-    const course = await Course.findById(req.params.id);
-
-    if (!course) {
-        res.status(404);
-        throw new Error('Course not found');
-    }
-
-    if (course.instructor && course.instructor.toString() !== req.user.id && req.user.role !== 'admin') {
-        res.status(401);
-        throw new Error('Not authorized');
-    }
-
-    await course.deleteOne();
-
-    res.status(200).json({ id: req.params.id });
-});
-
-// @desc    Add a module to a course
-// @route   POST /api/courses/:id/modules
-// @access  Private (Admin/Instructor)
-const addModule = asyncHandler(async (req, res) => {
-    const { title } = req.body;
-    const course = await Course.findById(req.params.id);
-
-    if (course) {
-        if (course.instructor && course.instructor.toString() !== req.user.id && req.user.role !== 'admin') {
-            res.status(401);
-            throw new Error('Not authorized');
-        }
-
-        const newModule = {
-            title,
-            videos: [],
-        };
-
-        const updatedCourse = await Course.findByIdAndUpdate(
-            req.params.id,
-            { $push: { modules: newModule } },
-            { new: true, lean: true }
-        );
-        res.status(201).json(updatedCourse);
-    } else {
-        res.status(404);
-        throw new Error('Course not found');
-    }
-});
-
-// @desc    Add a video to a module
-// @route   POST /api/courses/:id/modules/:moduleId/videos
-// @access  Private (Admin/Instructor)
-const addVideo = asyncHandler(async (req, res) => {
-    const { title, url, duration } = req.body;
-    const course = await Course.findById(req.params.id);
-
-    if (course) {
-        if (course.instructor && course.instructor.toString() !== req.user.id && req.user.role !== 'admin') {
-            res.status(401);
-            throw new Error('Not authorized');
-        }
-
-        const module = course.modules.id(req.params.moduleId);
-        if (module) {
-            const newVideo = {
-                title,
-                url,
-                duration,
-                exercises: []
-            };
-
-            const updatedCourse = await Course.findOneAndUpdate(
-                { _id: req.params.id, 'modules._id': req.params.moduleId },
-                { $push: { 'modules.$.videos': newVideo } },
-                { new: true, lean: true }
-            );
-
-            if (updatedCourse) {
-                res.status(201).json(updatedCourse);
-            } else {
-                res.status(404);
-                throw new Error('Module not found');
-            }
-        } else {
-            res.status(404);
-            throw new Error('Module not found');
-        }
-    } else {
-        res.status(404);
-        throw new Error('Course not found');
-    }
-});
-
-// @desc    Add an exercise to a video
-// @route   POST /api/courses/:id/modules/:moduleId/videos/:videoId/exercises
-// @access  Private (Admin/Instructor)
-const addExercise = asyncHandler(async (req, res) => {
-    const { question, options, correctAnswer, type } = req.body;
-    const course = await Course.findById(req.params.id);
-
-    if (course) {
-        if (course.instructor && course.instructor.toString() !== req.user.id && req.user.role !== 'admin') {
-            res.status(401);
-            throw new Error('Not authorized');
-        }
-
-        const module = course.modules.id(req.params.moduleId);
-        if (module) {
-            const video = module.videos.id(req.params.videoId);
-            if (video) {
-                video.exercises.push({ question, options, correctAnswer, type });
-                await course.save();
-                res.status(201).json(course);
-            } else {
-                res.status(404);
-                throw new Error('Video not found');
-            }
-        } else {
-            res.status(404);
-            throw new Error('Module not found');
-        }
-    } else {
-        res.status(404);
-        throw new Error('Course not found');
-    }
-});
-
-// @route   PUT /api/courses/:id/modules/:moduleId
-// @access  Private (Admin/Instructor)
-const updateModule = asyncHandler(async (req, res) => {
-    const { title, description } = req.body;
-    const course = await Course.findById(req.params.id);
-
-    if (!course) {
-        res.status(404);
-        throw new Error('Course not found');
-    }
-
-    // Check authorization
-    if (course.instructor.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
-        res.status(401);
-        throw new Error('Not authorized to update this module');
-    }
-
-    const module = course.modules.id(req.params.moduleId);
-    if (!module) {
-        res.status(404);
-        throw new Error('Module not found');
-    }
-
-    module.title = title || module.title;
-    module.description = description !== undefined ? description : module.description;
-
-    await course.save();
-    res.json(course);
-});
-
-// @route   DELETE /api/courses/:id/modules/:moduleId
-// @access  Private (Admin/Instructor)
-const deleteModule = asyncHandler(async (req, res) => {
-    const course = await Course.findById(req.params.id);
-
-    if (!course) {
-        res.status(404);
-        throw new Error('Course not found');
-    }
-
-    // Check authorization
-    if (course.instructor.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
-        res.status(401);
-        throw new Error('Not authorized to delete this module');
-    }
-
-    const module = course.modules.id(req.params.moduleId);
-    if (!module) {
-        res.status(404);
-        throw new Error('Module not found');
-    }
-
-    module.remove();
-    await course.save();
-    res.json({ message: 'Module removed' });
-});
-
-// @route   PUT /api/courses/:id/modules/:moduleId/videos/:videoId
-// @access  Private (Admin/Instructor)
-const updateVideo = asyncHandler(async (req, res) => {
-    const { title, url, duration } = req.body;
-    const course = await Course.findById(req.params.id);
-
-    if (!course) {
-        res.status(404);
-        throw new Error('Course not found');
-    }
-
-    // Check authorization
-    if (course.instructor.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
-        res.status(401);
-        throw new Error('Not authorized to update this video');
-    }
-
-    const module = course.modules.id(req.params.moduleId);
-    if (!module) {
-        res.status(404);
-        throw new Error('Module not found');
-    }
-
-    const video = module.videos.id(req.params.videoId);
-    if (!video) {
-        res.status(404);
-        throw new Error('Video not found');
-    }
-
-    video.title = title || video.title;
-    video.url = url || video.url;
-    video.duration = duration !== undefined ? duration : video.duration;
-
-    await course.save();
-    res.json(course);
-});
-
-// @route   DELETE /api/courses/:id/modules/:moduleId/videos/:videoId
-// @access  Private (Admin/Instructor)
-const deleteVideo = asyncHandler(async (req, res) => {
-    const course = await Course.findById(req.params.id);
-
-    if (!course) {
-        res.status(404);
-        throw new Error('Course not found');
-    }
-
-    // Check authorization
-    if (course.instructor.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
-        res.status(401);
-        throw new Error('Not authorized to delete this video');
-    }
-
-    const module = course.modules.id(req.params.moduleId);
-    if (!module) {
-        res.status(404);
-        throw new Error('Module not found');
-    }
-
-    const video = module.videos.id(req.params.videoId);
-    if (!video) {
-        res.status(404);
-        throw new Error('Video not found');
-    }
-
-    video.remove();
-    await course.save();
-    res.json({ message: 'Video removed' });
+    const updated = await query('SELECT * FROM courses WHERE id = $1', [id]);
+    res.json({ ...updated.rows[0], _id: id });
 });
 
 module.exports = {
@@ -490,13 +140,13 @@ module.exports = {
     getCourse,
     createCourse,
     updateCourse,
-    deleteCourse,
-    addModule,
-    updateModule,
-    deleteModule,
-    addVideo,
-    updateVideo,
-    deleteVideo,
-    addExercise,
-    getAdminCourses
+    getAdminCourses,
+    deleteCourse: async (req, res) => res.status(501).json({ message: 'Not implemented' }),
+    addModule: async (req, res) => res.status(501).json({ message: 'Not implemented' }),
+    updateModule: async (req, res) => res.status(501).json({ message: 'Not implemented' }),
+    deleteModule: async (req, res) => res.status(501).json({ message: 'Not implemented' }),
+    addVideo: async (req, res) => res.status(501).json({ message: 'Not implemented' }),
+    updateVideo: async (req, res) => res.status(501).json({ message: 'Not implemented' }),
+    deleteVideo: async (req, res) => res.status(501).json({ message: 'Not implemented' }),
+    addExercise: async (req, res) => res.status(501).json({ message: 'Not implemented' })
 };

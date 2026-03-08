@@ -63,7 +63,7 @@ class EmailService {
     rendered = rendered.replace(/\{\{#each\s+(\w+)\}\}([\s\S]*?)\{\{\/each\}\}/g, (match, variable, content) => {
       const array = data[variable];
       if (!Array.isArray(array) || array.length === 0) return '';
-      
+
       return array.map(item => {
         let itemContent = content;
         // Replace this.property with item values
@@ -71,13 +71,13 @@ class EmailService {
           return item[prop] !== undefined ? item[prop] : '';
         });
         // Handle nested conditionals like {{#if (eq this.type 'value')}}
-        itemContent = itemContent.replace(/\{\{#if\s+\(eq\s+this\.(\w+)\s+'([^']+)'\)\}\}([\s\S]*?)\{\{else if\s+\(eq\s+this\.(\w+)\s+'([^']+)'\)\}\}([\s\S]*?)\{\{\/if\}\}/g, 
+        itemContent = itemContent.replace(/\{\{#if\s+\(eq\s+this\.(\w+)\s+'([^']+)'\)\}\}([\s\S]*?)\{\{else if\s+\(eq\s+this\.(\w+)\s+'([^']+)'\)\}\}([\s\S]*?)\{\{\/if\}\}/g,
           (m, prop1, val1, content1, prop2, val2, content2) => {
             if (item[prop1] === val1) return content1;
             if (item[prop2] === val2) return content2;
             return '';
           });
-        itemContent = itemContent.replace(/\{\{#if\s+\(eq\s+this\.(\w+)\s+'([^']+)'\)\}\}([\s\S]*?)\{\{\/if\}\}/g, 
+        itemContent = itemContent.replace(/\{\{#if\s+\(eq\s+this\.(\w+)\s+'([^']+)'\)\}\}([\s\S]*?)\{\{\/if\}\}/g,
           (m, prop, val, content) => {
             return item[prop] === val ? content : '';
           });
@@ -109,20 +109,20 @@ class EmailService {
     };
 
     return {
-      transactionId: transaction.transactionId,
-      transactionDate: new Date(transaction.completedAt || transaction.initiatedAt).toLocaleString('en-IN', {
+      transactionId: transaction.transaction_id || transaction.transactionId,
+      transactionDate: new Date(transaction.completed_at || transaction.completedAt || transaction.initiated_at || transaction.initiatedAt).toLocaleString('en-IN', {
         dateStyle: 'long',
         timeStyle: 'short',
       }),
-      paymentMethod: paymentMethodMap[transaction.paymentMethod] || 'Unknown',
-      cardLast4: transaction.paymentMethodDetails?.cardLast4 || null,
-      originalAmount: this.formatAmount(transaction.originalAmount),
-      discountAmount: this.formatAmount(transaction.discountAmount),
-      finalAmount: this.formatAmount(transaction.finalAmount),
-      gstAmount: this.formatAmount(transaction.gstAmount),
-      discountCode: transaction.discountCode || null,
-      discountApplied: transaction.discountAmount && parseFloat(transaction.discountAmount.toString()) > 0,
-      receiptNumber: transaction.receiptNumber || 'N/A',
+      paymentMethod: paymentMethodMap[transaction.payment_method || transaction.paymentMethod] || 'Unknown',
+      cardLast4: (transaction.payment_method_details || transaction.paymentMethodDetails)?.cardLast4 || null,
+      originalAmount: this.formatAmount(transaction.original_amount || transaction.originalAmount),
+      discountAmount: this.formatAmount(transaction.discount_amount || transaction.discountAmount),
+      finalAmount: this.formatAmount(transaction.final_amount || transaction.finalAmount),
+      gstAmount: this.formatAmount(transaction.gst_amount || transaction.gstAmount),
+      discountCode: transaction.discount_code || transaction.discountCode || null,
+      discountApplied: (transaction.discount_amount || transaction.discountAmount) && parseFloat((transaction.discount_amount || transaction.discountAmount).toString()) > 0,
+      receiptNumber: transaction.receipt_number || transaction.receiptNumber || 'N/A',
     };
   }
 
@@ -132,7 +132,7 @@ class EmailService {
    * @returns {string} Formatted amount
    */
   formatAmount(amount) {
-    if (!amount) return '0.00';
+    if (amount === undefined || amount === null) return '0.00';
     return parseFloat(amount.toString()).toFixed(2);
   }
 
@@ -157,8 +157,8 @@ class EmailService {
         ...transactionData,
         studentName: student.name,
         courseTitle: course.title,
-        courseAccessUrl: `${this.companyInfo.websiteUrl}/courses/${course._id}`,
-        receiptDownloadUrl: transaction.receiptUrl || `${this.companyInfo.websiteUrl}/api/payment/receipt/${transaction.transactionId}`,
+        courseAccessUrl: `${this.companyInfo.websiteUrl}/courses/${course.id || course._id}`,
+        receiptDownloadUrl: transaction.receipt_url || transaction.receiptUrl || `${this.companyInfo.websiteUrl}/api/payment/receipt/${transaction.transaction_id || transaction.transactionId}`,
         ...this.companyInfo,
       };
 
@@ -208,7 +208,7 @@ class EmailService {
       // Prepare template data
       const transactionData = this.formatTransactionData(transaction);
       const retriesRemaining = Math.max(0, 3 - (transaction.retryCount || 0));
-      
+
       const templateData = {
         ...transactionData,
         studentName: student.name,
@@ -262,15 +262,15 @@ class EmailService {
         studentName: student.name,
         courseTitle: course.title,
         refundTransactionId: transaction.refundTransactionId || 'Processing',
-        originalTransactionId: transaction.transactionId,
-        originalPaymentDate: new Date(transaction.completedAt).toLocaleString('en-IN', {
+        originalTransactionId: transaction.transaction_id || transaction.transactionId,
+        originalPaymentDate: new Date(transaction.completed_at || transaction.completedAt).toLocaleString('en-IN', {
           dateStyle: 'long',
         }),
-        refundProcessedDate: new Date(transaction.refundInitiatedAt).toLocaleString('en-IN', {
+        refundProcessedDate: new Date(transaction.refund_initiated_at || transaction.refundInitiatedAt).toLocaleString('en-IN', {
           dateStyle: 'long',
           timeStyle: 'short',
         }),
-        refundInitiatedDate: new Date(transaction.refundInitiatedAt).toLocaleString('en-IN', {
+        refundInitiatedDate: new Date(transaction.refund_initiated_at || transaction.refundInitiatedAt).toLocaleString('en-IN', {
           dateStyle: 'long',
           timeStyle: 'short',
         }),
@@ -278,8 +278,8 @@ class EmailService {
           dateStyle: 'long',
         }),
         refundAmount: this.formatAmount(transaction.refundAmount || transaction.finalAmount),
-        refundType: transaction.refundAmount && parseFloat(transaction.refundAmount.toString()) < parseFloat(transaction.finalAmount.toString()) 
-          ? 'Partial Refund' 
+        refundType: transaction.refundAmount && parseFloat(transaction.refundAmount.toString()) < parseFloat(transaction.finalAmount.toString())
+          ? 'Partial Refund'
           : 'Full Refund',
         transactionHistoryUrl: `${this.companyInfo.websiteUrl}/payment/history`,
         ...this.companyInfo,
@@ -323,37 +323,37 @@ class EmailService {
         systemAmount: this.formatAmount(disc.systemAmount),
         gatewayAmount: this.formatAmount(disc.gatewayAmount),
         difference: Math.abs(
-          parseFloat(this.formatAmount(disc.systemAmount)) - 
+          parseFloat(this.formatAmount(disc.systemAmount)) -
           parseFloat(this.formatAmount(disc.gatewayAmount))
         ).toFixed(2),
       }));
 
       // Prepare template data
       const templateData = {
-        reconciliationId: reconciliation._id.toString(),
-        reconciliationDate: new Date(reconciliation.reconciliationDate).toLocaleDateString('en-IN', {
+        reconciliationId: (reconciliation.id || reconciliation._id).toString(),
+        reconciliationDate: new Date(reconciliation.reconciliation_date || reconciliation.reconciliationDate).toLocaleDateString('en-IN', {
           dateStyle: 'long',
         }),
-        startDate: new Date(reconciliation.startDate).toLocaleDateString('en-IN'),
-        endDate: new Date(reconciliation.endDate).toLocaleDateString('en-IN'),
-        totalTransactions: reconciliation.totalTransactions,
-        matchedTransactions: reconciliation.matchedTransactions,
-        unmatchedTransactions: reconciliation.unmatchedTransactions,
+        startDate: new Date(reconciliation.start_date || reconciliation.startDate).toLocaleDateString('en-IN'),
+        endDate: new Date(reconciliation.end_date || reconciliation.endDate).toLocaleDateString('en-IN'),
+        totalTransactions: reconciliation.total_transactions || reconciliation.totalTransactions,
+        matchedTransactions: reconciliation.matched_transactions || reconciliation.matchedTransactions,
+        unmatchedTransactions: reconciliation.unmatched_transactions || reconciliation.unmatchedTransactions,
         discrepancyCount: reconciliation.discrepancies.length,
-        totalAmount: this.formatAmount(reconciliation.totalAmount),
-        settledAmount: this.formatAmount(reconciliation.settledAmount),
-        pendingAmount: this.formatAmount(reconciliation.pendingAmount),
-        refundAmount: '0.00', // Can be calculated from transactions if needed
-        netSettlement: this.formatAmount(reconciliation.settledAmount),
+        totalAmount: this.formatAmount(reconciliation.total_amount || reconciliation.totalAmount),
+        settledAmount: this.formatAmount(reconciliation.settled_amount || reconciliation.settledAmount),
+        pendingAmount: this.formatAmount(reconciliation.pending_amount || reconciliation.pendingAmount),
+        refundAmount: this.formatAmount(reconciliation.refunded_amount || reconciliation.refundedAmount || 0),
+        netSettlement: this.formatAmount(reconciliation.net_settlement_amount || reconciliation.netSettlementAmount),
         hasDiscrepancies: reconciliation.discrepancies.length > 0,
         discrepancies: formattedDiscrepancies,
-        reconciliationStatus: reconciliation.status === 'completed' ? 'Completed' : 'In Progress',
+        reconciliationStatus: reconciliation.status === 'completed' ? 'Completed' : (reconciliation.status === 'resolved' ? 'Resolved/Action Required' : 'In Progress'),
         reportGeneratedDate: new Date().toLocaleString('en-IN', {
           dateStyle: 'long',
           timeStyle: 'short',
         }),
-        reconciliationDashboardUrl: `${this.companyInfo.websiteUrl}/admin/reconciliation/${reconciliation._id}`,
-        resolveDiscrepanciesUrl: `${this.companyInfo.websiteUrl}/admin/reconciliation/${reconciliation._id}/resolve`,
+        reconciliationDashboardUrl: `${this.companyInfo.websiteUrl}/admin/reconciliation/${reconciliation.id || reconciliation._id}`,
+        resolveDiscrepanciesUrl: `${this.companyInfo.websiteUrl}/admin/reconciliation/${reconciliation.id || reconciliation._id}/resolve`,
         dashboardUrl: `${this.companyInfo.websiteUrl}/admin/finance`,
         reportsUrl: `${this.companyInfo.websiteUrl}/admin/reports`,
         ...this.companyInfo,
@@ -363,7 +363,7 @@ class EmailService {
       const html = this.renderTemplate(template, templateData);
 
       // Send email to all finance team members
-      const emailPromises = financeEmails.map(email => 
+      const emailPromises = financeEmails.map(email =>
         sendEmail({
           email,
           subject: `Daily Reconciliation Report - ${templateData.reconciliationDate}`,

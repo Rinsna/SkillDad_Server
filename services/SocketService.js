@@ -16,23 +16,23 @@ class SocketService {
                     if (!origin) {
                         return callback(null, true);
                     }
-                    
+
                     // Allow Vercel deployments
                     if (origin.includes('.vercel.app')) {
                         return callback(null, true);
                     }
-                    
+
                     // Allow localhost and 127.0.0.1 on any port
                     if (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1') ||
                         origin.startsWith('https://localhost') || origin.startsWith('https://127.0.0.1')) {
                         return callback(null, true);
                     }
-                    
+
                     // Allow configured CLIENT_URL
                     if (process.env.CLIENT_URL && origin === process.env.CLIENT_URL) {
                         return callback(null, true);
                     }
-                    
+
                     // Log rejected origins for debugging
                     console.log('[Socket.IO] CORS rejected origin:', origin);
                     return callback(new Error('CORS not allowed'));
@@ -185,7 +185,9 @@ class SocketService {
                     role: user.role,
                     isVerified: user.isVerified,
                     discountRate: user.discountRate || 0,
-                    createdAt: user.createdAt
+                    createdAt: user.createdAt,
+                    registeredBy: user.registeredBy, // Now including who registered this user
+                    partnerCode: user.partnerCode     // Including partner code if any
                 },
                 timestamp: new Date()
             });
@@ -217,7 +219,7 @@ class SocketService {
      */
     async cleanup() {
         console.log('[Socket.IO] Cleaning up connections...');
-        
+
         if (this.io) {
             // Close all socket connections
             this.io.close();

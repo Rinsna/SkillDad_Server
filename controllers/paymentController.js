@@ -7,23 +7,16 @@
  * Requirements: 1.1-1.8, 3.1-3.9, 4.1-4.9, 7.1-7.9, 8.1-8.10, 11.1-11.10, 13.1-13.9, 17.1-17.10
  */
 
-const Transaction = require('../models/payment/Transaction');
-const Enrollment = require('../models/enrollmentModel');
-const Course = require('../models/courseModel');
-const User = require('../models/userModel');
-const Discount = require('../models/discountModel');
-const Progress = require('../models/progressModel');
+const { query } = require('../config/postgres');
+const socketService = require('../services/SocketService');
 const RazorpayGatewayService = require('../services/payment/RazorpayGatewayService');
 const PaymentSessionManager = require('../services/payment/PaymentSessionManager');
 const SecurityLogger = require('../services/payment/SecurityLogger');
 const PCIComplianceService = require('../services/payment/PCIComplianceService');
 const MonitoringService = require('../services/payment/MonitoringService');
 const ReceiptGeneratorService = require('../services/payment/ReceiptGeneratorService');
-const sendEmail = require('../utils/sendEmail');
 const EmailService = require('../services/payment/EmailService');
-const mongoose = require('mongoose');
 const path = require('path');
-const socketService = require('../services/SocketService');
 
 // Initialize services (lazy init for RazorpayGatewayService)
 let _razorpayService = null;
@@ -205,35 +198,21 @@ const initiatePayment = async (req, res) => {
     // Check gateway configuration
     const razorpayService = getRazorpayService();
 
-    // Validate course exists (Requirement 1.1)
-    const course = await Course.findById(courseId);
+    // Validate course exists
+    const courseRes = await query('SELECT * FROM courses WHERE id = $1', [courseId]);
+    const course = courseRes.rows[0];
     if (!course) {
-      return res.status(404).json({
-        success: false,
-        message: 'Course not found'
-      });
+      return res.status(404).json({ success: false, message: 'Course not found' });
     }
 
-    // Check for existing active enrollment - allow re-enrollment for renewals/upgrades
-    const existingEnrollment = await Enrollment.findOne({
-      student: studentId,
-      course: courseId,
-      status: 'active'
-    });
-
-    // Log if student is re-enrolling (for analytics)
-    if (existingEnrollment) {
-      console.log(`[INFO] Student ${studentId} is re-enrolling in course ${courseId}`);
-      // Allow payment to proceed - they might be renewing or upgrading
-    }
+    // Check for existing active enrollment
+    const enrollRes = await query('SELECT id FROM enrollments WHERE student_id = $1 AND course_id = $2 AND status = $3', [studentId, courseId, 'active']);
 
     // Get student details
-    const student = await User.findById(studentId);
+    const studentRes = await query('SELECT * FROM users WHERE id = $1', [studentId]);
+    const student = studentRes.rows[0];
     if (!student) {
-      return res.status(404).json({
-        success: false,
-        message: 'Student not found'
-      });
+      return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
     // Calculate amounts (Requirements 1.3, 13.1-13.3, 17.1, 17.3)
@@ -253,17 +232,14 @@ const initiatePayment = async (req, res) => {
     let discountPercentage = 0;
     let discountCodeUsed = null;
 
-    // Validate and apply discount code if provided (Requirements 13.1, 13.2, 13.7)
+    // Validate and apply discount code
     if (discountCode) {
-      const discount = await Discount.findOne({
-        code: discountCode.toUpperCase(),
-        isActive: true,
-        $or: [
-          { expiryDate: { $gt: new Date() } },
-          { expiryDate: null },
-          { expiryDate: { $exists: false } }
-        ]
-      });
+      const discRes = await query(`
+        SELECT * FROM discounts 
+        WHERE code = $1 AND active = true 
+        AND (expiry_date > NOW() OR expiry_date IS NULL)
+      `, [discountCode.toUpperCase()]);
+      const discount = discRes.rows[0];
 
       if (!discount) {
         return res.status(400).json({
@@ -388,76 +364,62 @@ const initiatePayment = async (req, res) => {
       amount: finalAmount,
     });
 
-    // Create transaction record with status "pending" (Requirements 1.8, 6.1)
-    const transaction = await Transaction.create({
-      transactionId,
-      student: studentId,
-      course: courseId,
-      originalAmount,
-      discountAmount,
-      finalAmount,
-      gstAmount,
-      currency: 'INR',
-      discountCode: discountCodeUsed,
-      discountPercentage,
-      status: 'pending',
-      sessionId: session.sessionId,
-      sessionExpiresAt: session.expiresAt,
-      ipAddress: req.ip,
-      userAgent: req.get('user-agent'),
-      initiatedAt: new Date(),
-    });
+    // Create transaction record in PG
+    await query(`
+      INSERT INTO transactions (
+        id, transaction_id, student_id, course_id, original_amount, 
+        discount_amount, final_amount, gst_amount, currency, 
+        discount_code, discount_percentage, status, session_id, 
+        session_expires_at, ip_address, user_agent, initiated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
+    `, [
+      `txn_${Date.now()}`, transactionId, studentId, courseId, originalAmount,
+      discountAmount, finalAmount, gstAmount, 'INR',
+      discountCodeUsed, discountPercentage, 'pending', session.sessionId,
+      session.expiresAt, req.ip, req.get('user-agent')
+    ]);
 
     // Generate Razorpay order
     let paymentRequest;
     try {
       paymentRequest = await razorpayService.createOrder({
         transactionId,
-        amount: finalAmount,
+        amount: Math.round(totalAmount * 100), // Convert to paise
         currency: 'INR',
         customerName: student.name,
         customerEmail: student.email,
         customerPhone: student.phone || '',
         productInfo: `${course.title} - Course Enrollment`,
-        courseId: course._id,
-        studentId: student._id,
+        courseId: course.id,
+        studentId: student.id,
         gstAmount,
       });
 
       // Store Razorpay order ID in transaction
-      transaction.gatewayTransactionId = paymentRequest.orderId;
-      await transaction.save();
+      await query('UPDATE transactions SET gateway_transaction_id = $1 WHERE transaction_id = $2', [paymentRequest.order_id, transactionId]);
 
     } catch (paymentError) {
-      // Handle gateway timeout during order creation (Requirement 7.9)
+      // Handle gateway timeout during order creation
       if (paymentError.message.includes('GATEWAY_TIMEOUT')) {
-        // Update transaction status
-        transaction.status = 'failed';
-        transaction.errorCode = 'GATEWAY_TIMEOUT';
-        transaction.errorMessage = 'Payment gateway timeout';
-        transaction.errorCategory = 'gateway_timeout';
-        await transaction.save();
+        await query(`
+          UPDATE transactions 
+          SET status = 'failed', error_code = 'GATEWAY_TIMEOUT', 
+              error_message = 'Payment gateway timeout', error_category = 'gateway_timeout' 
+          WHERE transaction_id = $1
+        `, [transactionId]);
 
         // Log the error
-        await monitoringService.logAPIError(
-          'createOrder',
-          'GATEWAY_TIMEOUT',
-          paymentError.message
-        );
+        await monitoringService.logAPIError('createOrder', 'GATEWAY_TIMEOUT', paymentError.message);
 
         return res.status(503).json({
           success: false,
-          message: 'Payment gateway is temporarily unavailable. Please try again in a few minutes.',
+          message: 'Payment gateway is temporarily unavailable.',
           errorCategory: 'gateway_timeout',
           transactionId,
         });
       }
 
-      // Handle other errors
-      transaction.status = 'failed';
-      transaction.errorMessage = paymentError.message;
-      await transaction.save();
-
+      await query("UPDATE transactions SET status = 'failed', error_message = $1 WHERE transaction_id = $2", [paymentError.message, transactionId]);
       throw paymentError;
     }
 
@@ -522,8 +484,7 @@ const initiatePayment = async (req, res) => {
  */
 const handleCallback = async (req, res) => {
   const razorpayService = getRazorpayService();
-  // Start a MongoDB session for transaction support (Requirement 4.8, 6.8)
-  const session = await mongoose.startSession();
+  // PostgreSQL handles transactions differently, we don't need mongoose.startSession()
 
   try {
     const callbackData = req.query;
@@ -537,8 +498,8 @@ const handleCallback = async (req, res) => {
 
     // Verify Razorpay signature (Requirement 3.2)
     const isSignatureValid = razorpayService.verifyPaymentSignature({
-      orderId: razorpay_order_id,
-      paymentId: razorpay_payment_id,
+      order_id: razorpay_order_id,
+      payment_id: razorpay_payment_id,
       signature: razorpay_signature,
     });
 
@@ -546,89 +507,24 @@ const handleCallback = async (req, res) => {
       return res.status(400).send('<h1>Invalid signature - payment verification failed</h1>');
     }
 
-    // Find transaction by order ID
-    const transaction = await Transaction.findOne({ gatewayTransactionId: razorpay_order_id })
-      .populate('student', 'name email')
-      .populate({
-        path: 'course',
-        select: 'title instructor',
-        populate: { path: 'instructor', select: 'name role' }
-      });
+    // Find transaction by order ID in PG
+    const transRes = await query(`
+        SELECT t.*, s.name as student_name, s.email as student_email, c.title as course_title, c.modules, u.id as instructor_id, u.name as instructor_name, u.role as instructor_role
+        FROM transactions t
+        JOIN users s ON t.student_id = s.id
+        JOIN courses c ON t.course_id = c.id
+        LEFT JOIN users u ON c.instructor_id = u.id
+        WHERE t.gateway_transaction_id = $1
+    `, [razorpay_order_id]);
 
+    const transaction = transRes.rows[0];
     if (!transaction) {
       return res.status(404).send('<h1>Transaction not found</h1>');
     }
 
-    const transactionId = transaction.transactionId;
+    const transactionId = transaction.transaction_id;
 
-    // Check session expiration (Requirements 1.7, 14.6)
-    const now = new Date();
-    if (transaction.sessionExpiresAt && now > transaction.sessionExpiresAt) {
-      // Session has expired
-      transaction.status = 'expired';
-      transaction.errorCode = 'SESSION_EXPIRED';
-      transaction.errorMessage = 'Payment session has expired (15 minute timeout)';
-      transaction.errorCategory = 'expired';
-      transaction.callbackData = callbackData;
-      transaction.callbackReceivedAt = new Date();
-      await transaction.save();
-
-      // Mark session as expired
-      try {
-        await sessionManager.expireSession(transaction.sessionId);
-      } catch (sessionError) {
-        console.error('Error expiring session:', sessionError);
-      }
-
-      // Send expired session HTML response
-      const expiredMessage = `
-        <html>
-          <head>
-            <title>Session Expired</title>
-            <style>
-              body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; margin: 0; }
-              .container { background: white; padding: 40px; border-radius: 12px; max-width: 600px; margin: 0 auto; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
-              .expired { color: #f59e0b; font-size: 64px; margin-bottom: 20px; }
-              h1 { color: #1f2937; margin-bottom: 10px; }
-              p { color: #6b7280; line-height: 1.6; margin-bottom: 30px; }
-              .details { background: #fef3c7; padding: 20px; margin: 20px 0; border-radius: 8px; border-left: 4px solid #f59e0b; }
-              .details p { margin: 5px 0; text-align: left; color: #92400e; }
-              .button { background: #3b82f6; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; display: inline-block; margin: 10px; font-weight: 600; transition: all 0.3s; }
-              .button:hover { background: #2563eb; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4); }
-              .button-secondary { background: #6b7280; }
-              .button-secondary:hover { background: #4b5563; }
-              .info { background: #dbeafe; padding: 15px; border-radius: 8px; margin-top: 20px; }
-              .info p { color: #1e40af; font-size: 14px; margin: 0; }
-            </style>
-          </head>
-          <body>
-            <div class="container">
-              <div class="expired">⏱️</div>
-              <h1>Payment Session Expired</h1>
-              <p>Your payment session has expired after 15 minutes of inactivity. For security reasons, payment sessions have a limited validity period.</p>
-              
-              <div class="details">
-                <p><strong>Transaction ID:</strong> ${transactionId}</p>
-                <p><strong>Course:</strong> ${transaction.course.title}</p>
-                <p><strong>Amount:</strong> INR ${transaction.finalAmountFormatted}</p>
-                <p><strong>Session Expired At:</strong> ${transaction.sessionExpiresAt.toLocaleString()}</p>
-              </div>
-
-              <div class="info">
-                <p><strong>What happened?</strong> Payment sessions expire after 15 minutes to protect your security. You can create a new payment session to complete your enrollment.</p>
-              </div>
-
-              <a href="/courses/${transaction.course._id}" class="button">Create New Payment Session</a>
-              <a href="/dashboard" class="button button-secondary">Go to Dashboard</a>
-            </div>
-          </body>
-        </html>
-      `;
-
-      return res.send(expiredMessage);
-    }
-
-    // Fetch payment details from Razorpay (Requirement 3.3)
+    // Fetch payment details from Razorpay
     let paymentDetails;
     try {
       paymentDetails = await razorpayService.fetchPaymentDetails(razorpay_payment_id);
@@ -637,178 +533,57 @@ const handleCallback = async (req, res) => {
       return res.status(500).send('<h1>Error fetching payment details</h1>');
     }
 
-    // Update transaction with callback data (Requirement 3.4)
-    transaction.callbackData = callbackData;
-    transaction.callbackReceivedAt = new Date();
-    transaction.callbackSignatureVerified = true;
-    transaction.razorpayPaymentId = razorpay_payment_id;
-
-    // Extract payment method details if available
-    if (paymentDetails.method) {
-      transaction.paymentMethod = paymentDetails.method;
-      transaction.paymentMethodDetails = {
-        cardType: paymentDetails.card?.network,
-        cardLast4: paymentDetails.card?.last4,
-        bankName: paymentDetails.bank,
-        upiId: paymentDetails.vpa,
-        walletProvider: paymentDetails.wallet,
-      };
-    }
-
-    let confirmationMessage = '';
-
-    // Handle success status (Requirements 3.4, 3.5)
     if (paymentDetails.status === 'captured') {
-      transaction.status = 'success';
-      transaction.completedAt = new Date();
 
-      // Activate course enrollment (Requirement 3.5)
-      let enrollment = await Enrollment.findOne({
-        student: transaction.student._id,
-        course: transaction.course._id,
+      // Update transaction status to success
+      await query(`
+        UPDATE transactions 
+        SET status = 'success', completed_at = NOW(), razorpay_payment_id = $1, 
+            payment_method = $2, callback_signature_verified = true
+        WHERE transaction_id = $3
+      `, [razorpay_payment_id, paymentDetails.method, transactionId]);
+
+      // Activate enrollment in PG
+      const enrollId = `enroll_${Date.now()}`;
+      await query(`
+        INSERT INTO enrollments (id, student_id, course_id, status, created_at, updated_at)
+        VALUES ($1, $2, $3, 'active', NOW(), NOW())
+        ON CONFLICT (student_id, course_id) DO UPDATE SET status = 'active'
+      `, [enrollId, transaction.student_id, transaction.course_id]);
+
+      // Link student to university if needed
+      if (transaction.instructor_role === 'university') {
+        await query('UPDATE users SET university_id = $1 WHERE id = $2', [transaction.instructor_id, transaction.student_id]);
+      }
+
+      // Real-time notification
+      socketService.sendToUser(transaction.student_id, 'notification', {
+        type: 'payment_success',
+        title: 'Payment Confirmed!',
+        message: `Your payment for "${transaction.course_title}" was successful.`
       });
 
-      if (!enrollment) {
-        enrollment = await Enrollment.create([{
-          student: transaction.student._id,
-          course: transaction.course._id,
-          enrollmentDate: new Date(),
-          status: 'active',
-          progress: 0,
-          completedModules: 0,
-          totalModules: transaction.course.modules?.length || 0,
-        }]);
-
-        // Also create Progress record for the student dashboard
-        await Progress.create([{
-          user: transaction.student._id,
-          course: transaction.course._id,
-          completedVideos: [],
-          completedExercises: [],
-          projectSubmissions: [],
-          isCompleted: false
-        }]);
-
-        transaction.enrollment = enrollment[0]._id;
-      } else {
-        enrollment.status = 'active';
-        await enrollment.save();
-      }
-
-      // Link student to university if course is university-hosted
-      try {
-        const student = await User.findById(transaction.student._id);
-        const instructor = await User.findById(transaction.course.instructor);
-        if (student && instructor && instructor.role === 'university') {
-          student.universityId = instructor._id;
-          await student.save();
-          console.log(`[Payment] Linked student ${student.email} to university ${instructor.name}`);
-        }
-      } catch (linkError) {
-        console.error('Error linking student to university:', linkError);
-      }
-
-      // Generate receipt (Requirement 9.1)
-      try {
-        const receipt = await receiptGenerator.generateReceipt(transactionId);
-        transaction.receiptNumber = receipt.receiptNumber;
-        transaction.receiptUrl = receipt.receiptUrl;
-        transaction.receiptGeneratedAt = new Date();
-      } catch (receiptError) {
-        console.error('Error generating receipt:', receiptError);
-      }
-
-      // Save transaction before committing
-      await transaction.save();
-
-      // Send confirmation email (Requirement 3.9) - after commit
-      try {
-        await emailService.sendPaymentConfirmation(
-          transaction,
-          transaction.student,
-          transaction.course,
-          transaction.receiptUrl ? path.join(__dirname, '../../client/public', transaction.receiptUrl) : null
-        );
-      } catch (emailError) {
-        console.error('Error sending confirmation email:', emailError);
-      }
-
-      // Real-time notification: Payment Confirmed
-      socketService.sendToUser(
-        transaction.student._id,
-        'notification',
-        {
-          type: 'payment_success',
-          title: 'Payment Confirmed!',
-          message: `Your payment for "${transaction.course.title}" was successful.`,
-          transactionId: transactionId,
-          amount: transaction.amount
-        }
-      );
-
       confirmationMessage = generateSuccessMessage(transaction, transactionId);
-
-      // Track successful payment (Requirement 16.1)
-      await monitoringService.trackPaymentAttempt(transactionId, 'success');
-
     } else if (paymentDetails.status === 'failed') {
-      // Handle failure status (Requirements 3.6, 7.1, 7.2)
-      transaction.status = 'failed';
-      transaction.errorCode = paymentDetails.error_code || 'PAYMENT_FAILED';
-      transaction.errorMessage = paymentDetails.error_description || 'Payment failed';
-
-      // Categorize failure reason (Requirement 7.2)
-      const errorCode = paymentDetails.error_code || '';
-      if (errorCode.includes('INSUFFICIENT')) {
-        transaction.errorCategory = 'insufficient_funds';
-      } else if (errorCode.includes('DECLINED') || errorCode.includes('CARD')) {
-        transaction.errorCategory = 'card_declined';
-      } else if (errorCode.includes('TIMEOUT') || errorCode.includes('NETWORK')) {
-        transaction.errorCategory = 'network';
-      } else if (errorCode.includes('EXPIRED')) {
-        transaction.errorCategory = 'expired';
-      } else {
-        transaction.errorCategory = 'other';
-      }
-
-      // Save transaction before committing
-      await transaction.save();
-
-      // Send failure notification email (Requirement 7.7) - after commit
-      try {
-        await emailService.sendPaymentFailure(
-          transaction,
-          transaction.student,
-          transaction.course
-        );
-      } catch (emailError) {
-        console.error('Error sending failure email:', emailError);
-      }
-
+      await query(`
+        UPDATE transactions 
+        SET status = 'failed', error_code = $1, error_message = $2, 
+            callback_received_at = NOW(), callback_signature_verified = true
+        WHERE transaction_id = $3
+      `, [paymentDetails.error_code || 'PAYMENT_FAILED', paymentDetails.error_description || 'Payment failed', transactionId]);
       confirmationMessage = generateFailureMessage(transaction, transactionId);
-
-      // Track failed payment (Requirement 16.1)
-      await monitoringService.trackPaymentAttempt(transactionId, 'failed');
     }
 
     // Complete session
-    await sessionManager.completeSession(transaction.sessionId);
+    await sessionManager.completeSession(transaction.session_id);
 
-    // Redirect to frontend confirmation page (Requirement 3.8)
+    // Redirect to frontend
     const frontendUrl = process.env.CLIENT_URL || 'http://localhost:5173';
     const redirectUrl = `${frontendUrl}/dashboard/payment-callback?transactionId=${transactionId}&status=${transaction.status}&razorpay_payment_id=${razorpay_payment_id}&razorpay_order_id=${razorpay_order_id}`;
-
-    console.log('[DEBUG] Redirecting to frontend:', redirectUrl);
     res.redirect(redirectUrl);
-
   } catch (error) {
     console.error('Error handling callback:', error);
-    res.status(500).send('<h1>Error</h1><p>An error occurred while processing your payment</p>');
-  } finally {
-    // End session
-    if (session) {
-      session.endSession();
-    }
+    res.status(500).send('<h1>Error processing payment</h1>');
   }
 };
 
@@ -830,12 +605,12 @@ function generateSuccessMessage(transaction, transactionId) {
         <div class="details">
           <h3>Transaction Details</h3>
           <p><strong>Transaction ID:</strong> ${transactionId}</p>
-          <p><strong>Course:</strong> ${transaction.course.title}</p>
-          <p><strong>Amount Paid:</strong> INR ${transaction.finalAmountFormatted}</p>
-          <p><strong>Payment Method:</strong> ${transaction.paymentMethod || 'N/A'}</p>
+          <p><strong>Course:</strong> ${transaction.course_title}</p>
+          <p><strong>Amount Paid:</strong> INR ${parseFloat(transaction.final_amount).toFixed(2)}</p>
+          <p><strong>Payment Method:</strong> ${transaction.payment_method || 'N/A'}</p>
         </div>
         <a href="/dashboard" class="button">Go to Dashboard</a>
-        ${transaction.receiptUrl ? `<a href="${transaction.receiptUrl}" class="button">Download Receipt</a>` : ''}
+        ${transaction.receipt_url ? `<a href="${transaction.receipt_url}" class="button">Download Receipt</a>` : ''}
       </body>
     </html>
   `;
@@ -843,9 +618,9 @@ function generateSuccessMessage(transaction, transactionId) {
 
 // Helper function to generate failure message HTML
 function generateFailureMessage(transaction, transactionId) {
-  const canRetry = transaction.retryCount < 3;
+  const canRetry = transaction.retry_count < 3;
   const retryMessage = canRetry
-    ? '<p><a href="/courses/' + transaction.course._id + '" class="button">Try Again</a></p>'
+    ? '<p><a href="/courses/' + transaction.course_id + '" class="button">Try Again</a></p>'
     : '<p>Maximum retry attempts reached. Please contact support.</p>';
 
   return `
@@ -864,9 +639,9 @@ function generateFailureMessage(transaction, transactionId) {
         <div class="details">
           <h3>Transaction Details</h3>
           <p><strong>Transaction ID:</strong> ${transactionId}</p>
-          <p><strong>Course:</strong> ${transaction.course.title}</p>
-          <p><strong>Amount:</strong> INR ${transaction.finalAmountFormatted}</p>
-          <p><strong>Reason:</strong> ${transaction.errorMessage}</p>
+          <p><strong>Course:</strong> ${transaction.course_title}</p>
+          <p><strong>Amount:</strong> INR ${parseFloat(transaction.final_amount).toFixed(2)}</p>
+          <p><strong>Reason:</strong> ${transaction.error_message || 'Unknown error'}</p>
         </div>
         ${retryMessage}
         <a href="/support" class="button">Contact Support</a>
@@ -885,8 +660,8 @@ function generateFailureMessage(transaction, transactionId) {
  */
 const handleWebhook = async (req, res) => {
   const razorpayService = getRazorpayService();
-  // Start a MongoDB session for transaction support (Requirement 4.8, 6.8)
-  const session = await mongoose.startSession();
+  const { getClient } = require('../config/postgres');
+  const client = await getClient();
 
   try {
     const signature = req.headers['x-razorpay-signature'];
@@ -896,6 +671,7 @@ const handleWebhook = async (req, res) => {
     const isSignatureValid = razorpayService.verifyWebhookSignature(webhookBody, signature);
 
     if (!isSignatureValid) {
+      client.release();
       return res.status(400).json({
         success: false,
         message: 'Invalid webhook signature',
@@ -908,6 +684,7 @@ const handleWebhook = async (req, res) => {
 
     // Only process payment.captured and payment.failed events
     if (event !== 'payment.captured' && event !== 'payment.failed') {
+      client.release();
       return res.status(200).json({ received: true });
     }
 
@@ -916,227 +693,137 @@ const handleWebhook = async (req, res) => {
     const status = event === 'payment.captured' ? 'success' : 'failed';
 
     if (!orderId) {
+      client.release();
       return res.status(400).json({
         success: false,
         message: 'Missing order ID',
       });
     }
 
-    // Start transaction with retry logic for concurrent updates
-    let transaction;
-    let retryCount = 0;
-    const maxRetries = 3;
+    // Start PG Transaction
+    await client.query('BEGIN');
 
-    while (retryCount < maxRetries) {
-      try {
-        await session.startTransaction();
+    // Find transaction by order ID with lock
+    const transRes = await client.query('SELECT * FROM transactions WHERE gateway_transaction_id = $1 FOR UPDATE', [orderId]);
+    const transaction = transRes.rows[0];
 
-        // Find transaction by order ID with lock (using session for isolation)
-        transaction = await Transaction.findOne({ gatewayTransactionId: orderId }).session(session);
-
-        if (!transaction) {
-          await session.abortTransaction();
-          return res.status(404).json({
-            success: false,
-            message: 'Transaction not found',
-          });
-        }
-
-        break; // Successfully acquired lock
-      } catch (error) {
-        await session.abortTransaction();
-
-        if (error.name === 'MongoServerError' && error.code === 112) {
-          // WriteConflict error - retry
-          retryCount++;
-          if (retryCount >= maxRetries) {
-            throw new Error('Failed to acquire transaction lock after multiple retries');
-          }
-          // Wait before retry with exponential backoff
-          await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, retryCount)));
-          await session.startTransaction();
-        } else {
-          throw error;
-        }
-      }
+    if (!transaction) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(404).json({
+        success: false,
+        message: 'Transaction not found',
+      });
     }
 
-    // Store webhook data
-    transaction.webhookData.push({
+    // Update webhook data and signature verification
+    const updatedWebhookData = [...(transaction.webhook_data || []), {
       data: webhookData,
       receivedAt: new Date(),
-      processed: false,
-    });
-
-    transaction.webhookSignatureVerified = true;
+      processed: true
+    }];
 
     // Update transaction status (Requirement 4.5)
     if (status === 'success' && transaction.status !== 'success') {
-      transaction.status = 'success';
-      transaction.completedAt = new Date();
-      transaction.razorpayPaymentId = paymentId;
+      // Update transaction status
+      await client.query(`
+        UPDATE transactions 
+        SET status = 'success', completed_at = NOW(), razorpay_payment_id = $1, 
+            webhook_data = $2, webhook_signature_verified = true
+        WHERE id = $3
+      `, [paymentId, JSON.stringify(updatedWebhookData), transaction.id]);
 
-      // Activate enrollment if not already active (Requirement 4.6)
-      let enrollment = await Enrollment.findOne({
-        student: transaction.student,
-        course: transaction.course,
-      }).session(session);
+      // Activate enrollment (Requirement 4.6)
+      const enrollId = `enroll_${Date.now()}`;
+      await client.query(`
+        INSERT INTO enrollments (id, student_id, course_id, status, created_at, updated_at)
+        VALUES ($1, $2, $3, 'active', NOW(), NOW())
+        ON CONFLICT (student_id, course_id) DO UPDATE SET status = 'active'
+      `, [enrollId, transaction.student_id, transaction.course_id]);
 
-      if (!enrollment) {
-        const course = await Course.findById(transaction.course).session(session);
-        enrollment = await Enrollment.create([{
-          student: transaction.student,
-          course: transaction.course,
-          enrollmentDate: new Date(),
-          status: 'active',
-          progress: 0,
-          completedModules: 0,
-          totalModules: course?.modules?.length || 0,
-        }], { session });
+      // Fetch student and course for notifications and university linking
+      const studentRes = await client.query('SELECT * FROM users WHERE id = $1', [transaction.student_id]);
+      const courseRes = await client.query('SELECT * FROM courses WHERE id = $1', [transaction.course_id]);
+      const student = studentRes.rows[0];
+      const course = courseRes.rows[0];
 
-        // Also create Progress record for the student dashboard
-        await Progress.create([{
-          user: transaction.student,
-          course: transaction.course,
-          completedVideos: [],
-          completedExercises: [],
-          projectSubmissions: [],
-          isCompleted: false
-        }], { session });
+      if (student && course && course.instructor_id) {
+        const instructorRes = await client.query('SELECT * FROM users WHERE id = $1', [course.instructor_id]);
+        const instructor = instructorRes.rows[0];
 
-        transaction.enrollment = enrollment[0]._id;
-      } else if (enrollment.status !== 'active') {
-        enrollment.status = 'active';
-        await enrollment.save({ session });
-      }
-
-      // Link student to university if course is university-hosted
-      try {
-        const student = await User.findById(transaction.student);
-        const course = await Course.findById(transaction.course);
-        if (student && course && course.instructor) {
-          const instructor = await User.findById(course.instructor);
-          if (instructor && instructor.role === 'university') {
-            student.universityId = instructor._id;
-            await student.save({ session });
-            console.log(`[Webhook] Linked student ${student.email} to university ${instructor.name}`);
-          }
-        }
-      } catch (linkError) {
-        console.error('Error linking student to university in webhook:', linkError);
-      }
-
-      // Generate receipt if not already generated
-      if (!transaction.receiptUrl) {
-        try {
-          const receipt = await receiptGenerator.generateReceipt(transaction.transactionId);
-          transaction.receiptNumber = receipt.receiptNumber;
-          transaction.receiptUrl = receipt.receiptUrl;
-          transaction.receiptGeneratedAt = new Date();
-        } catch (receiptError) {
-          console.error('Error generating receipt:', receiptError);
+        if (instructor && instructor.role === 'university') {
+          await client.query('UPDATE users SET university_id = $1 WHERE id = $2', [instructor.id, student.id]);
         }
       }
 
-      // Mark webhook as processed
-      transaction.webhookData[transaction.webhookData.length - 1].processed = true;
+      // Commit PG Transaction
+      await client.query('COMMIT');
+      client.release();
 
-      // Save transaction before committing
-      await transaction.save({ session });
-
-      // Commit transaction to ensure atomicity
-      await session.commitTransaction();
-
-      // Emit real-time status update via Socket.io
-      socketService.sendToUser(transaction.student.toString(), 'PAYMENT_STATUS_UPDATE', {
-        transactionId: transaction.transactionId,
+      // Emit real-time status update
+      socketService.sendToUser(transaction.student_id, 'PAYMENT_STATUS_UPDATE', {
+        transactionId: transaction.transaction_id,
         status: 'success',
-        courseId: transaction.course,
+        courseId: transaction.course_id,
         message: 'Payment confirmed successfully'
       });
 
-      // Send confirmation email - after commit
-      try {
-        const student = await User.findById(transaction.student);
-        const course = await Course.findById(transaction.course);
-
-        if (student && course) {
+      // Send confirmation email
+      if (student && course) {
+        try {
           await emailService.sendPaymentConfirmation(
             transaction,
             student,
             course,
-            transaction.receiptUrl ? path.join(__dirname, '../../client/public', transaction.receiptUrl) : null
+            null // Receipt URL can be added later if needed
           );
+        } catch (emailErr) {
+          console.error('Error sending webhook confirmation email:', emailErr);
         }
-      } catch (emailError) {
-        console.error('Error sending webhook confirmation email:', emailError);
       }
 
     } else if (status === 'failed' && transaction.status === 'pending') {
-      transaction.status = 'failed';
-      transaction.errorCode = paymentEntity.error_code || 'PAYMENT_FAILED';
-      transaction.errorMessage = paymentEntity.error_description || 'Payment failed';
+      const errorCode = paymentEntity.error_code || 'PAYMENT_FAILED';
+      const errorMessage = paymentEntity.error_description || 'Payment failed';
 
-      // Mark webhook as processed
-      transaction.webhookData[transaction.webhookData.length - 1].processed = true;
+      await client.query(`
+        UPDATE transactions 
+        SET status = 'failed', error_code = $1, error_message = $2, 
+            webhook_data = $3, webhook_signature_verified = true
+        WHERE id = $4
+      `, [errorCode, errorMessage, JSON.stringify(updatedWebhookData), transaction.id]);
 
-      // Save transaction before committing
-      await transaction.save({ session });
+      await client.query('COMMIT');
+      client.release();
 
-      // Commit transaction
-      await session.commitTransaction();
-
-      // Emit real-time status update via Socket.io
-      socketService.sendToUser(transaction.student.toString(), 'PAYMENT_STATUS_UPDATE', {
-        transactionId: transaction.transactionId,
+      socketService.sendToUser(transaction.student_id, 'PAYMENT_STATUS_UPDATE', {
+        transactionId: transaction.transaction_id,
         status: 'failed',
-        message: transaction.errorMessage || 'Payment failed'
+        message: errorMessage
       });
 
-      // Send failure notification - after commit
-      try {
-        const student = await User.findById(transaction.student);
-        const course = await Course.findById(transaction.course);
-
-        if (student && course) {
-          await emailService.sendPaymentFailure(
-            transaction,
-            student,
-            course
-          );
-        }
-      } catch (emailError) {
-        console.error('Error sending webhook failure email:', emailError);
-      }
     } else {
-      // Status hasn't changed or is already in final state - just mark webhook as processed
-      transaction.webhookData[transaction.webhookData.length - 1].processed = true;
-      await transaction.save({ session });
-      await session.commitTransaction();
+      // Already processed or status didn't change
+      await client.query('COMMIT');
+      client.release();
     }
 
-    // Return 200 OK (Requirement 4.7)
     res.status(200).json({
       success: true,
       message: 'Webhook processed successfully',
     });
 
   } catch (error) {
-    // Abort transaction on error
-    if (session.inTransaction()) {
-      await session.abortTransaction();
+    if (client) {
+      await client.query('ROLLBACK');
+      client.release();
     }
-
     console.error('Error handling webhook:', error);
-    // Return 500 for retry (Requirement 4.9)
     res.status(500).json({
       success: false,
       message: 'Webhook processing failed',
       error: error.message,
     });
-  } finally {
-    // End session
-    session.endSession();
   }
 };
 
@@ -1153,11 +840,15 @@ const checkPaymentStatus = async (req, res) => {
     const { transactionId } = req.params;
     const userId = req.user.id;
 
-    // Find transaction
-    const transaction = await Transaction.findOne({ transactionId })
-      .populate('student', 'name email')
-      .populate('course', 'title thumbnail')
-      .populate('enrollment');
+    // Find transaction in PG
+    const transRes = await query(`
+        SELECT t.*, c.title as course_title, c.thumbnail as course_thumbnail
+        FROM transactions t
+        JOIN courses c ON t.course_id = c.id
+        WHERE t.transaction_id = $1
+    `, [transactionId]);
+
+    const transaction = transRes.rows[0];
 
     if (!transaction) {
       return res.status(404).json({
@@ -1167,7 +858,7 @@ const checkPaymentStatus = async (req, res) => {
     }
 
     // Verify user owns this transaction
-    if (transaction.student._id.toString() !== userId && req.user.role !== 'admin') {
+    if (transaction.student_id !== userId && req.user.role !== 'admin') {
       return res.status(403).json({
         success: false,
         message: 'Unauthorized access to transaction',
@@ -1176,51 +867,48 @@ const checkPaymentStatus = async (req, res) => {
 
     // Query real-time status from Razorpay (Requirement 11.6)
     try {
-      if (transaction.razorpayPaymentId) {
-        const paymentDetails = await razorpayService.fetchPaymentDetails(transaction.razorpayPaymentId);
+      if (transaction.razorpay_payment_id) {
+        const paymentDetails = await razorpayService.fetchPaymentDetails(transaction.razorpay_payment_id);
         if (paymentDetails.status === 'captured' && transaction.status !== 'success') {
-          // Manually trigger success if it wasn't caught by webhook
+          await query('UPDATE transactions SET status = \'success\', completed_at = NOW() WHERE id = $1', [transaction.id]);
           transaction.status = 'success';
-          transaction.completedAt = new Date();
-          await transaction.save();
+          transaction.completed_at = new Date();
         }
-      } else if (transaction.gatewayTransactionId) {
-        const orderDetails = await razorpayService.fetchOrderDetails(transaction.gatewayTransactionId);
+      } else if (transaction.gateway_transaction_id) {
+        const orderDetails = await razorpayService.fetchOrderDetails(transaction.gateway_transaction_id);
         if (orderDetails.status === 'paid' && transaction.status !== 'success') {
+          await query('UPDATE transactions SET status = \'success\', completed_at = NOW() WHERE id = $1', [transaction.id]);
           transaction.status = 'success';
-          transaction.completedAt = new Date();
-          await transaction.save();
+          transaction.completed_at = new Date();
         }
       }
     } catch (gatewayError) {
       console.error('Error querying gateway status:', gatewayError);
-      // Continue with local status if gateway query fails
     }
 
     // Return transaction details
     res.status(200).json({
       success: true,
       transaction: {
-        transactionId: transaction.transactionId,
+        transactionId: transaction.transaction_id,
         status: transaction.status,
-        amount: transaction.finalAmountFormatted,
-        originalAmount: transaction.originalAmountFormatted,
-        discountAmount: transaction.discountAmountFormatted,
-        gstAmount: transaction.gstAmountFormatted,
+        amount: parseFloat(transaction.final_amount).toFixed(2),
+        originalAmount: parseFloat(transaction.original_amount).toFixed(2),
+        discountAmount: parseFloat(transaction.discount_amount).toFixed(2),
+        gstAmount: parseFloat(transaction.gst_amount).toFixed(2),
         currency: transaction.currency,
-        paymentMethod: transaction.paymentMethod,
-        paymentMethodDetails: transaction.paymentMethodDetails,
+        paymentMethod: transaction.payment_method,
         course: {
-          id: transaction.course._id,
-          title: transaction.course.title,
-          thumbnail: transaction.course.thumbnail,
+          id: transaction.course_id,
+          title: transaction.course_title,
+          thumbnail: transaction.course_thumbnail,
         },
-        initiatedAt: transaction.initiatedAt,
-        completedAt: transaction.completedAt,
-        receiptUrl: transaction.receiptUrl,
-        receiptNumber: transaction.receiptNumber,
-        errorMessage: transaction.errorMessage,
-        errorCategory: transaction.errorCategory,
+        initiatedAt: transaction.initiated_at,
+        completedAt: transaction.completed_at,
+        receiptUrl: transaction.receipt_url,
+        receiptNumber: transaction.receipt_number,
+        errorMessage: transaction.error_message,
+        errorCategory: transaction.error_category,
       },
     });
 
@@ -1247,58 +935,58 @@ const getPaymentHistory = async (req, res) => {
     const userId = req.user.id;
     const { page = 1, limit = 10, status } = req.query;
 
-    // Build query
-    const query = { student: userId };
-    if (status) {
-      query.status = status;
-    }
-
     // Calculate pagination
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    // Fetch manual payments
-    const manualPayments = await Payment.find(query)
-      .populate('course', 'title thumbnail category')
-      .lean();
+    // Fetch manual payments from PG
+    const manualRes = await query(`
+        SELECT p.*, c.title as course_title, c.thumbnail as course_thumbnail, c.category as course_category
+        FROM payments p
+        JOIN courses c ON p.course_id = c.id
+        WHERE p.student_id = $1
+        ${status ? 'AND p.status = $2' : ''}
+    `, status ? [userId, status] : [userId]);
 
-    // Mapping manual payments to unified format
-    const mappedManual = manualPayments.map(p => ({
-      transactionId: p._id.toString(),
+    const mappedManual = manualRes.rows.map(p => ({
+      transactionId: p.transaction_id || p.id,
       course: {
-        id: p.course?._id,
-        title: p.course?.title,
-        thumbnail: p.course?.thumbnail,
-        category: p.course?.category,
+        id: p.course_id,
+        title: p.course_title,
+        thumbnail: p.course_thumbnail,
+        category: p.course_category,
       },
-      amount: p.amount?.toFixed(2),
+      amount: parseFloat(p.amount).toFixed(2),
       status: p.status,
-      paymentMethod: p.paymentMethod,
-      initiatedAt: p.createdAt,
-      completedAt: p.reviewedAt,
-      screenshotUrl: p.screenshotUrl,
+      paymentMethod: p.payment_method,
+      initiatedAt: p.created_at,
+      completedAt: p.reviewed_at,
+      screenshotUrl: p.screenshot_url,
       isManual: true
     }));
 
-    // Fetch transactions with pagination
-    const transactions = await Transaction.find(query)
-      .populate('course', 'title thumbnail category')
-      .sort({ createdAt: -1 });
+    // Fetch transactions from PG
+    const transRes = await query(`
+        SELECT t.*, c.title as course_title, c.thumbnail as course_thumbnail, c.category as course_category
+        FROM transactions t
+        JOIN courses c ON t.course_id = c.id
+        WHERE t.student_id = $1
+        ${status ? 'AND t.status = $2' : ''}
+    `, status ? [userId, status] : [userId]);
 
-    // Format transactions
-    const formattedTransactions = transactions.map((txn) => ({
-      transactionId: txn.transactionId,
+    const formattedTransactions = transRes.rows.map(txn => ({
+      transactionId: txn.transaction_id,
       course: {
-        id: txn.course?._id,
-        title: txn.course?.title,
-        thumbnail: txn.course?.thumbnail,
-        category: txn.course?.category,
+        id: txn.course_id,
+        title: txn.course_title,
+        thumbnail: txn.course_thumbnail,
+        category: txn.course_category,
       },
-      amount: txn.finalAmountFormatted,
+      amount: parseFloat(txn.final_amount).toFixed(2),
       status: txn.status === 'success' ? 'approved' : txn.status === 'failed' ? 'rejected' : 'pending',
-      paymentMethod: txn.paymentMethod,
-      initiatedAt: txn.initiatedAt,
-      completedAt: txn.completedAt,
-      receiptUrl: txn.receiptUrl,
+      paymentMethod: txn.payment_method,
+      initiatedAt: txn.initiated_at,
+      completedAt: txn.completed_at,
+      receiptUrl: txn.receipt_url,
     }));
 
     // Combine and sort
@@ -1307,7 +995,7 @@ const getPaymentHistory = async (req, res) => {
 
     // Manual Pagination
     const totalItems = allHistory.length;
-    const paginatedHistory = allHistory.slice(skip, skip + parseInt(limit));
+    const paginatedHistory = allHistory.slice(offset, offset + parseInt(limit));
     const totalPages = Math.ceil(totalItems / parseInt(limit));
 
     res.status(200).json({
@@ -1352,10 +1040,16 @@ const processRefund = async (req, res) => {
       });
     }
 
-    // Find transaction (Requirement 8.1)
-    const transaction = await Transaction.findOne({ transactionId })
-      .populate('student', 'name email')
-      .populate('course', 'title');
+    // Find transaction in PG
+    const transRes = await query(`
+        SELECT t.*, s.name as student_name, s.email as student_email, c.title as course_title
+        FROM transactions t
+        JOIN users s ON t.student_id = s.id
+        JOIN courses c ON t.course_id = c.id
+        WHERE t.transaction_id = $1
+    `, [transactionId]);
+
+    const transaction = transRes.rows[0];
 
     if (!transaction) {
       return res.status(404).json({
@@ -1382,9 +1076,9 @@ const processRefund = async (req, res) => {
 
     // Validate refund amount (Requirements 8.3, 17.10)
     const refundAmount = parseFloat(amount);
-    const originalAmount = parseFloat(transaction.finalAmount.toString());
+    const originalAmountValue = parseFloat(transaction.final_amount);
 
-    if (refundAmount <= 0 || refundAmount > originalAmount) {
+    if (refundAmount <= 0 || refundAmount > originalAmountValue) {
       return res.status(400).json({
         success: false,
         message: 'Invalid refund amount',
@@ -1393,8 +1087,8 @@ const processRefund = async (req, res) => {
 
     // Send refund request to Razorpay
     const refundResponse = await razorpayService.initiateRefund(
-      transaction.razorpayPaymentId,
-      refundAmount
+      transaction.razorpay_payment_id,
+      Math.round(refundAmount * 100) // Convert to paise
     );
 
     // Verify signature of refund response (Requirement 8.4)
@@ -1414,38 +1108,32 @@ const processRefund = async (req, res) => {
       });
     }
 
-    // Update transaction record (Requirement 8.5)
-    transaction.refundAmount = refundAmount;
-    transaction.refundTransactionId = refundResponse.refundTransactionId;
-    transaction.refundInitiatedBy = adminId;
-    transaction.refundInitiatedAt = new Date();
-    transaction.refundReason = reason;
-
     // Determine refund status
-    if (refundAmount >= originalAmount) {
-      transaction.status = 'refunded';
-    } else {
-      transaction.status = 'partial_refund';
-    }
+    const newStatus = (refundAmount >= originalAmountValue) ? 'refunded' : 'partial_refund';
 
-    // Store refund processing time (Requirement 8.9)
     const refundCompletionDate = new Date();
     refundCompletionDate.setDate(refundCompletionDate.getDate() + 7); // 5-7 business days
-    transaction.refundCompletedAt = refundCompletionDate;
 
-    await transaction.save();
+    // Update transaction record in PG
+    await query(`
+      UPDATE transactions 
+      SET refund_amount = $1, 
+          refund_transaction_id = $2, 
+          refund_initiated_by = $3, 
+          refund_initiated_at = NOW(), 
+          refund_reason = $4,
+          status = $5,
+          refund_completed_at = $6
+      WHERE id = $7
+    `, [refundAmount, refundResponse.refund_id, adminId, reason, newStatus, refundCompletionDate, transaction.id]);
 
     // Deactivate enrollment (Requirement 8.6)
-    if (refundAmount >= originalAmount) {
-      const enrollment = await Enrollment.findOne({
-        student: transaction.student._id,
-        course: transaction.course._id,
-      });
-
-      if (enrollment) {
-        enrollment.status = 'suspended';
-        await enrollment.save();
-      }
+    if (refundAmount >= originalAmountValue) {
+      await query(`
+        UPDATE enrollments 
+        SET status = 'suspended', updated_at = NOW() 
+        WHERE student_id = $1 AND course_id = $2
+      `, [transaction.student_id, transaction.course_id]);
     }
 
     // Log refund operation (Requirement 5.8)
@@ -1460,8 +1148,8 @@ const processRefund = async (req, res) => {
     try {
       await emailService.sendRefundConfirmation(
         transaction,
-        transaction.student,
-        transaction.course
+        { name: transaction.student_name, email: transaction.student_email },
+        { title: transaction.course_title }
       );
     } catch (emailError) {
       console.error('Error sending refund email:', emailError);
@@ -1469,7 +1157,7 @@ const processRefund = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      refundTransactionId: refundResponse.refundTransactionId,
+      refundTransactionId: refundResponse.refund_id,
       status: refundResponse.status,
       estimatedCompletionDate: refundCompletionDate,
       message: 'Refund initiated successfully',
@@ -1498,9 +1186,15 @@ const retryPayment = async (req, res) => {
     const { transactionId } = req.params;
     const userId = req.user.id;
 
-    // Find original transaction (Requirement 7.3)
-    const originalTransaction = await Transaction.findOne({ transactionId })
-      .populate('course', 'title price');
+    // Find original transaction in PG
+    const transRes = await query(`
+        SELECT t.*, c.title as course_title, c.price as course_price
+        FROM transactions t
+        JOIN courses c ON t.course_id = c.id
+        WHERE t.transaction_id = $1
+    `, [transactionId]);
+
+    const originalTransaction = transRes.rows[0];
 
     if (!originalTransaction) {
       return res.status(404).json({
@@ -1510,7 +1204,7 @@ const retryPayment = async (req, res) => {
     }
 
     // Verify user owns this transaction
-    if (originalTransaction.student.toString() !== userId) {
+    if (originalTransaction.student_id !== userId) {
       return res.status(403).json({
         success: false,
         message: 'Unauthorized access to transaction',
@@ -1526,7 +1220,7 @@ const retryPayment = async (req, res) => {
     }
 
     // Check retry count (Requirement 7.5)
-    if (originalTransaction.retryCount >= 3) {
+    if (originalTransaction.retry_count >= 3) {
       return res.status(400).json({
         success: false,
         message: 'Maximum retry attempts reached. Please create a new payment session.',
@@ -1534,7 +1228,7 @@ const retryPayment = async (req, res) => {
     }
 
     // Check retry is within 24 hours (Requirement 7.5)
-    const hoursSinceInitiation = (Date.now() - originalTransaction.initiatedAt.getTime()) / (1000 * 60 * 60);
+    const hoursSinceInitiation = (Date.now() - new Date(originalTransaction.initiated_at).getTime()) / (1000 * 60 * 60);
     if (hoursSinceInitiation > 24) {
       return res.status(400).json({
         success: false,
@@ -1542,69 +1236,67 @@ const retryPayment = async (req, res) => {
       });
     }
 
-    // Get student details
-    const student = await User.findById(userId);
+    // Get student details from PG
+    const studentRes = await query('SELECT * FROM users WHERE id = $1', [userId]);
+    const student = studentRes.rows[0];
 
     // Generate new transaction ID (Requirement 7.6)
     const newTransactionId = generateTransactionId();
+    const newId = `txn_${Date.now()}`;
+    const sessionExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-    // Create new transaction record linked to original (Requirement 7.6, 6.9)
-    const newTransaction = await Transaction.create({
-      transactionId: newTransactionId,
-      student: userId,
-      course: originalTransaction.course._id,
-      originalAmount: originalTransaction.originalAmount,
-      discountAmount: originalTransaction.discountAmount,
-      finalAmount: originalTransaction.finalAmount,
-      gstAmount: originalTransaction.gstAmount,
-      currency: originalTransaction.currency,
-      discountCode: originalTransaction.discountCode,
-      discountPercentage: originalTransaction.discountPercentage,
-      status: 'pending',
-      sessionId: '', // Will be set after session creation
-      sessionExpiresAt: new Date(Date.now() + 15 * 60 * 1000),
-      retryCount: originalTransaction.retryCount + 1,
-      lastRetryAt: new Date(),
-      ipAddress: req.ip,
-      userAgent: req.get('user-agent'),
-      initiatedAt: new Date(),
-    });
+    // Create new transaction record in PG linked to original (Requirement 7.6, 6.9)
+    await query(`
+      INSERT INTO transactions (
+        id, transaction_id, student_id, course_id, original_amount, 
+        discount_amount, final_amount, gst_amount, currency, 
+        discount_code, discount_percentage, status, session_id, 
+        session_expires_at, retry_count, last_retry_at, ip_address, 
+        user_agent, initiated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), $16, $17, NOW())
+    `, [
+      newId, newTransactionId, userId, originalTransaction.course_id,
+      originalTransaction.original_amount, originalTransaction.discount_amount,
+      originalTransaction.final_amount, originalTransaction.gst_amount,
+      originalTransaction.currency, originalTransaction.discount_code,
+      originalTransaction.discount_percentage, 'pending', '', // session_id will be set below
+      sessionExpiresAt, originalTransaction.retry_count + 1, req.ip, req.get('user-agent')
+    ]);
 
-    // Increment retry count on original transaction
-    originalTransaction.retryCount += 1;
-    originalTransaction.lastRetryAt = new Date();
-    await originalTransaction.save();
+    // Increment retry count on original transaction in PG
+    await query(`
+      UPDATE transactions 
+      SET retry_count = retry_count + 1, last_retry_at = NOW() 
+      WHERE id = $1
+    `, [originalTransaction.id]);
 
     // Create new payment session (Requirement 7.6)
     const session = await sessionManager.createSession({
       transactionId: newTransactionId,
       student: userId,
-      course: originalTransaction.course._id,
-      amount: parseFloat(originalTransaction.finalAmount.toString()),
+      course: originalTransaction.course_id,
+      amount: parseFloat(originalTransaction.final_amount),
     });
 
-    // Update new transaction with session ID
-    newTransaction.sessionId = session.sessionId;
-    newTransaction.sessionExpiresAt = session.expiresAt;
-    await newTransaction.save();
+    // Update new transaction with session ID in PG
+    await query('UPDATE transactions SET session_id = $1, session_expires_at = $2 WHERE transaction_id = $3', [session.sessionId, session.expiresAt, newTransactionId]);
 
     // Generate Razorpay order
     const paymentRequest = await razorpayService.createOrder({
       transactionId: newTransactionId,
-      amount: parseFloat(originalTransaction.finalAmount.toString()),
+      amount: Math.round((parseFloat(originalTransaction.final_amount) + parseFloat(originalTransaction.gst_amount)) * 100), // Total amount in paise
       currency: 'INR',
       customerName: student.name,
       customerEmail: student.email,
       customerPhone: student.phone || '',
-      productInfo: `${originalTransaction.course.title} - Course Enrollment (Retry)`,
-      courseId: originalTransaction.course._id,
+      productInfo: `${originalTransaction.course_title} - Course Enrollment (Retry)`,
+      courseId: originalTransaction.course_id,
       studentId: userId,
-      gstAmount: originalTransaction.gstAmount,
+      gstAmount: originalTransaction.gst_amount,
     });
 
-    // Store Razorpay order ID in transaction
-    newTransaction.gatewayTransactionId = paymentRequest.orderId;
-    await newTransaction.save();
+    // Store Razorpay order ID in transaction in PG
+    await query('UPDATE transactions SET gateway_transaction_id = $1 WHERE transaction_id = $2', [paymentRequest.order_id, newTransactionId]);
 
     // Log retry attempt
     await securityLogger.logPaymentAttempt(
@@ -1619,8 +1311,8 @@ const retryPayment = async (req, res) => {
       newTransactionId,
       orderId: paymentRequest.orderId,
       keyId: razorpayService.getPublishableKey(),
-      retryCount: newTransaction.retryCount,
       expiresAt: session.expiresAt,
+      retryCount: originalTransaction.retry_count + 1,
     });
 
   } catch (error) {
@@ -1636,79 +1328,92 @@ const retryPayment = async (req, res) => {
 const createManualPayment = async (req, res) => {
   try {
     const { courseId, amount, paymentMethod, notes } = req.body;
-    const studentId = req.user._id;
+    const studentId = req.user.id; // Corrected to req.user.id for PG compatibility
 
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'Please upload payment proof (screenshot)' });
     }
 
-    const course = await Course.findById(courseId);
+    // Fetch course details from PG
+    const courseRes = await query('SELECT * FROM courses WHERE id = $1', [courseId]);
+    const course = courseRes.rows[0];
     if (!course) {
       return res.status(404).json({ success: false, message: 'Course not found' });
     }
 
-    // Fetch student with partner/university details to ensure correct credit allocation
-    const student = await User.findById(studentId)
-      .populate('registeredBy', 'name profile')
-      .populate('universityId', 'name profile');
+    // Fetch student with partner/university details from PG
+    // Note: This assumes university_id and registered_by are handled in PG.
+    // In many PG schemas, user self-joins or has foreign keys.
+    const studentRes = await query(`
+      SELECT s.*, 
+             u.name as university_name, u.profile as university_profile,
+             r.name as registered_by_name, r.profile as registered_by_profile
+      FROM users s
+      LEFT JOIN users u ON s.university_id = u.id
+      LEFT JOIN users r ON s.registered_by = r.id
+      WHERE s.id = $1
+    `, [studentId]);
+
+    const student = studentRes.rows[0];
 
     if (!student) {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
     // Determine partner and center for reporting
-    const partnerUser = student.registeredBy || student.universityId;
-    const partner = partnerUser ? partnerUser._id : null;
+    const partnerId = student.registered_by || student.university_id;
 
     // Set center based on partner type
     let center = 'Direct';
-    if (student.universityId) {
-      center = student.universityId.profile?.universityName || student.universityId.name;
-    } else if (student.registeredBy) {
-      center = student.registeredBy.profile?.partnerName || student.registeredBy.name || 'Partner Network';
+    if (student.university_id) {
+      center = (student.university_profile && student.university_profile.universityName) || student.university_name;
+    } else if (student.registered_by) {
+      center = (student.registered_by_profile && student.registered_by_profile.partnerName) || student.registered_by_name || 'Partner Network';
     }
 
     // Generate a unique transaction ID for tracking
     const transactionId = `MAN-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
 
-    const Payment = require('../models/paymentModel');
-    const payment = await Payment.create({
-      student: studentId,
-      course: courseId,
-      amount: amount || course.price,
-      paymentMethod: paymentMethod || 'bank_transfer',
-      notes: notes,
-      screenshotUrl: `uploads/payments/${req.file.filename}`,
-      status: 'pending',
-      partner: partner,
-      center: center,
-      transactionId: transactionId
-    });
+    // Create payment record in PG
+    const paymentId = `pay_${Date.now()}`;
+    const paymentAmount = amount || course.price;
+
+    await query(`
+      INSERT INTO payments (
+        id, student_id, course_id, amount, payment_method, 
+        notes, screenshot_url, status, partner_id, center, 
+        transaction_id, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+    `, [
+      paymentId, studentId, courseId, paymentAmount,
+      paymentMethod || 'bank_transfer', notes,
+      `uploads/payments/${req.file.filename}`, 'pending',
+      partnerId, center, transactionId
+    ]);
 
     // Notify admin/finance via WebSocket
     socketService.sendToRole('admin', 'payment_proof_uploaded', {
-      paymentId: payment._id,
+      paymentId: paymentId,
       studentName: student.name,
       studentEmail: student.email,
       courseTitle: course.title,
-      amount: payment.amount,
+      amount: paymentAmount,
       transactionId
     });
 
     socketService.sendToRole('finance', 'payment_proof_uploaded', {
-      paymentId: payment._id,
+      paymentId: paymentId,
       studentName: student.name,
       studentEmail: student.email,
       courseTitle: course.title,
-      amount: payment.amount,
+      amount: paymentAmount,
       transactionId
     });
 
     res.status(201).json({
       success: true,
       message: 'Payment proof submitted successfully. Waiting for finance approval.',
-      transactionId,
-      payment
+      paymentId
     });
   } catch (error) {
     console.error('Error in createManualPayment:', error);
@@ -1723,13 +1428,18 @@ const createManualPayment = async (req, res) => {
  */
 const approvePayment = async (req, res) => {
   try {
+    const reviewerId = req.user.id;
     const { id } = req.params;
-    const reviewerId = req.user._id;
 
-    const Payment = require('../models/paymentModel');
-    const payment = await Payment.findById(id)
-      .populate('student', 'name email universityId')
-      .populate('course', 'title');
+    // Get payment details from PG
+    const payRes = await query(`
+        SELECT p.*, s.email as student_email, s.name as student_name
+        FROM payments p
+        JOIN users s ON p.student_id = s.id
+        WHERE p.id = $1
+    `, [id]);
+
+    const payment = payRes.rows[0];
 
     if (!payment) {
       return res.status(404).json({ success: false, message: 'Payment not found' });
@@ -1739,69 +1449,37 @@ const approvePayment = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Payment already reviewed' });
     }
 
-    // Update payment status
-    payment.status = 'approved';
-    payment.reviewedBy = reviewerId;
-    payment.reviewedAt = new Date();
-    await payment.save();
+    // Update payment record in PG
+    await query(`
+      UPDATE payments 
+      SET status = 'approved', 
+          reviewed_by = $1, 
+          reviewed_at = NOW(), 
+          updated_at = NOW() 
+      WHERE id = $2
+    `, [reviewerId, id]);
 
-    // Create enrollment
-    let enrollment = await Enrollment.findOne({
-      student: payment.student._id,
-      course: payment.course._id
-    });
+    // Create enrollment in PG
+    const enrollId = `enroll_${Date.now()}`;
+    await query(`
+      INSERT INTO enrollments (id, student_id, course_id, status, created_at, updated_at)
+      VALUES ($1, $2, $3, 'active', NOW(), NOW())
+      ON CONFLICT (student_id, course_id) DO UPDATE SET status = 'active'
+    `, [enrollId, payment.student_id, payment.course_id]);
 
-    if (!enrollment) {
-      enrollment = await Enrollment.create({
-        student: payment.student._id,
-        course: payment.course._id,
-        enrollmentDate: new Date(),
-        status: 'active',
-        progress: 0,
-        completedModules: 0,
-        totalModules: 0
-      });
-
-      // Create Progress record
-      await Progress.create({
-        user: payment.student._id,
-        course: payment.course._id,
-        completedVideos: [],
-        completedExercises: [],
-        projectSubmissions: [],
-        isCompleted: false
-      });
-
-      payment.enrollment = enrollment._id;
-      await payment.save();
-    } else {
-      enrollment.status = 'active';
-      await enrollment.save();
-    }
+    // Update payment with enrollment_id
+    await query('UPDATE payments SET enrollment_id = $1 WHERE id = $2', [enrollId, id]);
 
     // Notify student via WebSocket
-    socketService.sendToUser(payment.student._id, 'payment_approved', {
-      paymentId: payment._id,
-      courseTitle: payment.course.title,
+    socketService.sendToUser(payment.student_id, 'payment_approved', {
+      paymentId: id,
       amount: payment.amount,
-      transactionId: payment.transactionId
+      transactionId: payment.transaction_id
     });
 
     // Send email notification
     try {
-      await sendEmail({
-        to: payment.student.email,
-        subject: 'Payment Approved - Course Enrollment Activated',
-        html: `
-          <h2>Payment Approved!</h2>
-          <p>Dear ${payment.student.name},</p>
-          <p>Your payment proof has been approved and your enrollment for <strong>${payment.course.title}</strong> is now active.</p>
-          <p><strong>Transaction ID:</strong> ${payment.transactionId}</p>
-          <p><strong>Amount:</strong> ₹${payment.amount}</p>
-          <p>You can now access the course content from your dashboard.</p>
-          <p>Thank you for choosing SkillDad!</p>
-        `
-      });
+      await emailService.sendManualPaymentApproval(payment.student_email, payment.student_name, payment.transaction_id, payment.amount);
     } catch (emailError) {
       console.error('Error sending approval email:', emailError);
     }
@@ -1826,57 +1504,43 @@ const rejectPayment = async (req, res) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
-    const reviewerId = req.user._id;
+    const reviewerId = req.user.id;
 
     if (!reason) {
       return res.status(400).json({ success: false, message: 'Rejection reason is required' });
     }
 
-    const Payment = require('../models/paymentModel');
-    const payment = await Payment.findById(id)
-      .populate('student', 'name email')
-      .populate('course', 'title');
+    // Update payment record in PG
+    await query(`
+      UPDATE payments 
+      SET status = 'rejected', 
+          notes = $1, 
+          reviewed_by = $2, 
+          reviewed_at = NOW(), 
+          updated_at = NOW() 
+      WHERE id = $3
+    `, [reason, reviewerId, id]);
 
-    if (!payment) {
-      return res.status(404).json({ success: false, message: 'Payment not found' });
-    }
-
-    if (payment.status !== 'pending') {
-      return res.status(400).json({ success: false, message: 'Payment already reviewed' });
-    }
-
-    // Update payment status
-    payment.status = 'rejected';
-    payment.reviewedBy = reviewerId;
-    payment.reviewedAt = new Date();
-    payment.notes = payment.notes ? `${payment.notes}\n\nRejection Reason: ${reason}` : `Rejection Reason: ${reason}`;
-    await payment.save();
+    // Fetch details for notification
+    const payRes = await query(`
+        SELECT p.*, s.email as student_email, s.name as student_name
+        FROM payments p
+        JOIN users s ON p.student_id = s.id
+        WHERE p.id = $1
+    `, [id]);
+    const payment = payRes.rows[0];
 
     // Notify student via WebSocket
-    socketService.sendToUser(payment.student._id, 'payment_rejected', {
-      paymentId: payment._id,
-      courseTitle: payment.course.title,
+    socketService.sendToUser(payment.student_id, 'payment_rejected', {
+      paymentId: id,
       amount: payment.amount,
-      transactionId: payment.transactionId,
+      transactionId: payment.transaction_id,
       reason
     });
 
     // Send email notification
     try {
-      await sendEmail({
-        to: payment.student.email,
-        subject: 'Payment Proof Rejected - Action Required',
-        html: `
-          <h2>Payment Proof Rejected</h2>
-          <p>Dear ${payment.student.name},</p>
-          <p>Unfortunately, your payment proof for <strong>${payment.course.title}</strong> has been rejected.</p>
-          <p><strong>Transaction ID:</strong> ${payment.transactionId}</p>
-          <p><strong>Amount:</strong> ₹${payment.amount}</p>
-          <p><strong>Reason:</strong> ${reason}</p>
-          <p>Please submit a new payment proof with the correct information or contact support for assistance.</p>
-          <p>Thank you for your understanding.</p>
-        `
-      });
+      await emailService.sendManualPaymentRejection(payment.student_email, payment.student_name, payment.transaction_id, reason);
     } catch (emailError) {
       console.error('Error sending rejection email:', emailError);
     }
@@ -1899,16 +1563,31 @@ const rejectPayment = async (req, res) => {
  */
 const getPendingProofs = async (req, res) => {
   try {
-    const Payment = require('../models/paymentModel');
-    const pendingPayments = await Payment.find({ status: 'pending' })
-      .populate('student', 'name email')
-      .populate('course', 'title thumbnail')
-      .sort({ createdAt: -1 });
+    const pendingPayments = await query(`
+        SELECT p.*, s.name as student_name, s.email as student_email, c.title as course_title, c.thumbnail as course_thumbnail
+        FROM payments p
+        JOIN users s ON p.student_id = s.id
+        JOIN courses c ON p.course_id = c.id
+        WHERE p.status = 'pending'
+        ORDER BY p.created_at DESC
+    `);
 
     res.status(200).json({
       success: true,
-      count: pendingPayments.length,
-      payments: pendingPayments
+      count: pendingPayments.rowCount,
+      payments: pendingPayments.rows.map(p => ({
+        _id: p.id,
+        student: { name: p.student_name, email: p.student_email },
+        course: { title: p.course_title, thumbnail: p.course_thumbnail },
+        amount: p.amount,
+        paymentMethod: p.payment_method,
+        screenshotUrl: p.screenshot_url,
+        createdAt: p.created_at,
+        transactionId: p.transaction_id,
+        notes: p.notes,
+        partner: p.partner_id,
+        center: p.center
+      }))
     });
   } catch (error) {
     console.error('Error fetching pending proofs:', error);

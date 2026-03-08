@@ -9,6 +9,7 @@ const compression = require('compression');
 dotenv.config({ path: path.join(__dirname, '.env') });
 
 const connectDB = require('./config/db');
+const { connectPostgres } = require('./config/postgres');
 const { errorHandler } = require('./middleware/errorMiddleware');
 const jobScheduler = require('./jobs');
 const http = require('http');
@@ -17,6 +18,7 @@ const socketService = require('./services/SocketService');
 const fs = require('fs');
 
 connectDB();
+connectPostgres();
 
 // Registry of upload paths
 const uploads = {
@@ -106,38 +108,51 @@ app.use(cors({
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
-app.use('/api/users', require('./routes/userRoutes'));
-app.use('/api/courses', require('./routes/courseRoutes'));
-app.use('/api/courses', require('./routes/interactiveContentRoutes'));
-app.use('/api/submissions', require('./routes/submissionRoutes'));
-app.use('/api/grading', require('./routes/manualGradingQueueRoutes'));
-app.use('/api/analytics', require('./routes/analyticsRoutes'));
-app.use('/api/progress', require('./routes/progressRoutes'));
-app.use('/api/enrollment', require('./routes/enrollmentRoutes'));
-app.use('/api/university', require('./routes/universityRoutes'));
-app.use('/api/partner', require('./routes/partnerRoutes'));
-app.use('/api/admin', require('./routes/adminRoutes'));
-app.use('/api/admin/skilldad-universities', require('./routes/skillDadUniversityRoutes'));
-app.use('/api/sessions', require('./routes/liveSessionRoutes'));
-app.use('/api/finance', require('./routes/financeRoutes'));
-app.use('/api/enquiries', require('./routes/enquiryRoutes'));
-app.use('/api/exams', require('./routes/examRoutes'));
-app.use('/api/results', require('./routes/resultRoutes'));
-app.use('/api', require('./routes/questionRoutes'));
-app.use('/api/documents', require('./routes/documentRoutes'));
-app.use('/api/projects', require('./routes/projectRoutes'));
-app.use('/api/support', require('./routes/supportRoutes'));
-app.use('/api/faqs', require('./routes/faqRoutes'));
-app.use('/api/public', require('./routes/publicRoutes'));
-app.use('/api/notifications', require('./routes/notificationRoutes'));
-app.use('/api/webhooks', require('./routes/webhookRoutes'));
-app.use('/api/discount', require('./routes/discountRoutes'));
-
 // Payment Routes
-app.use('/api/payment', require('./routes/paymentRoutes'));
-app.use('/api/admin/payment', require('./routes/adminPaymentRoutes'));
-app.use('/api/admin/reconciliation', require('./routes/reconciliationRoutes'));
-app.use('/api/admin/monitoring', require('./routes/monitoringRoutes'));
+const routeFiles = [
+  ['/api/users', './routes/userRoutes'],
+  ['/api/db-status', './routes/dbStatusRoutes'],
+  ['/api/courses', './routes/courseRoutes'],
+  ['/api/courses', './routes/interactiveContentRoutes'],
+  ['/api/submissions', './routes/submissionRoutes'],
+  ['/api/grading', './routes/manualGradingQueueRoutes'],
+  ['/api/analytics', './routes/analyticsRoutes'],
+  ['/api/progress', './routes/progressRoutes'],
+  ['/api/enrollment', './routes/enrollmentRoutes'],
+  ['/api/university', './routes/universityRoutes'],
+  ['/api/partner', './routes/partnerRoutes'],
+  ['/api/admin', './routes/adminRoutes'],
+  ['/api/admin/skilldad-universities', './routes/skillDadUniversityRoutes'],
+  ['/api/admin/migrations', './routes/migrationRoutes'],
+  ['/api/sessions', './routes/liveSessionRoutes'],
+  ['/api/finance', './routes/financeRoutes'],
+  ['/api/enquiries', './routes/enquiryRoutes'],
+  ['/api/exams', './routes/examRoutes'],
+  ['/api/results', './routes/resultRoutes'],
+  ['/api', './routes/questionRoutes'],
+  ['/api/documents', './routes/documentRoutes'],
+  ['/api/projects', './routes/projectRoutes'],
+  ['/api/support', './routes/supportRoutes'],
+  ['/api/faqs', './routes/faqRoutes'],
+  ['/api/public', './routes/publicRoutes'],
+  ['/api/notifications', './routes/notificationRoutes'],
+  ['/api/webhooks', './routes/webhookRoutes'],
+  ['/api/discount', './routes/discountRoutes'],
+  ['/api/payment', './routes/paymentRoutes'],
+  ['/api/admin/payment', './routes/adminPaymentRoutes'],
+  ['/api/admin/reconciliation', './routes/reconciliationRoutes'],
+  ['/api/admin/monitoring', './routes/monitoringRoutes']
+];
+
+routeFiles.forEach(([path, routeFile]) => {
+  try {
+    console.log(`[Server] Loading route ${path} from ${routeFile}`);
+    app.use(path, require(routeFile));
+  } catch (error) {
+    console.error(`[Server] CRITICAL ERROR loading route ${path} from ${routeFile}:`, error);
+    process.exit(1);
+  }
+});
 
 app.get('/', (req, res) => {
   res.send('API is running...');

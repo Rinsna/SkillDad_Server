@@ -8,7 +8,7 @@
  */
 
 const crypto = require('crypto');
-const PaymentSession = require('../../models/payment/PaymentSession');
+const { query } = require('../../config/postgres');
 
 /**
  * PaymentSessionManager
@@ -55,22 +55,33 @@ class PaymentSessionManager {
 
     // Generate secure session ID
     const sessionId = this.generateSecureSessionId();
-    
+
     // Calculate expiration time (15 minutes from now)
     const expiresAt = new Date(Date.now() + this.sessionTimeout);
 
-    // Create payment session
-    const session = await PaymentSession.create({
+    // Create payment session in PostgreSQL
+    const res = await query(`
+        INSERT INTO payment_sessions (
+          session_id, 
+          transaction_id, 
+          student_id, 
+          course_id, 
+          amount, 
+          status, 
+          expires_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING *
+    `, [
       sessionId,
-      transactionId: transactionData.transactionId,
-      student: transactionData.student,
-      course: transactionData.course,
-      amount: transactionData.amount,
-      status: 'active',
-      expiresAt,
-    });
+      transactionData.transactionId,
+      transactionData.student,
+      transactionData.course,
+      transactionData.amount,
+      'active',
+      expiresAt
+    ]);
 
-    return session;
+    return res.rows[0];
   }
 
   /**
@@ -86,10 +97,10 @@ class PaymentSessionManager {
   generateSecureSessionId() {
     // Generate 32 random bytes (256 bits)
     const randomBytes = crypto.randomBytes(32);
-    
+
     // Convert to hex and take first 20 characters, convert to uppercase
     const hexString = randomBytes.toString('hex').substring(0, 20).toUpperCase();
-    
+
     // Return with SES_ prefix
     return `SES_${hexString}`;
   }
@@ -106,8 +117,9 @@ class PaymentSessionManager {
    * Requirements: 1.7, 14.6
    */
   async validateSession(sessionId) {
-    // Find session by ID
-    const session = await PaymentSession.findOne({ sessionId });
+    // Find session by ID in PostgreSQL
+    const res = await query('SELECT * FROM payment_sessions WHERE session_id = $1', [sessionId]);
+    const session = res.rows[0];
 
     // Check if session exists
     if (!session) {
@@ -121,7 +133,7 @@ class PaymentSessionManager {
 
     // Check if session has expired
     const now = new Date();
-    if (now > session.expiresAt) {
+    if (now > new Date(session.expires_at)) {
       // Mark session as expired
       await this.expireSession(sessionId);
       throw new Error('Session has expired');
@@ -142,12 +154,16 @@ class PaymentSessionManager {
    * Requirements: 1.7, 14.6
    */
   async expireSession(sessionId) {
-    // Find and update session status to expired
-    const session = await PaymentSession.findOneAndUpdate(
-      { sessionId },
-      { status: 'expired' },
-      { new: true }
-    );
+    // Find and update session status to expired in PostgreSQL
+    const res = await query(`
+      UPDATE payment_sessions 
+      SET status = 'expired', 
+          updated_at = NOW() 
+      WHERE session_id = $1 
+      RETURNING *
+    `, [sessionId]);
+
+    const session = res.rows[0];
 
     if (!session) {
       throw new Error('Session not found');
@@ -166,14 +182,16 @@ class PaymentSessionManager {
    * @throws {Error} If session is not found
    */
   async completeSession(sessionId) {
-    const session = await PaymentSession.findOneAndUpdate(
-      { sessionId },
-      { 
-        status: 'completed',
-        completedAt: new Date()
-      },
-      { new: true }
-    );
+    const res = await query(`
+      UPDATE payment_sessions 
+      SET status = 'completed', 
+          completed_at = $1,
+          updated_at = NOW() 
+      WHERE session_id = $2 
+      RETURNING *
+    `, [new Date(), sessionId]);
+
+    const session = res.rows[0];
 
     if (!session) {
       throw new Error('Session not found');
@@ -192,14 +210,16 @@ class PaymentSessionManager {
    * @throws {Error} If session is not found
    */
   async cancelSession(sessionId) {
-    const session = await PaymentSession.findOneAndUpdate(
-      { sessionId },
-      { 
-        status: 'cancelled',
-        cancelledAt: new Date()
-      },
-      { new: true }
-    );
+    const res = await query(`
+      UPDATE payment_sessions 
+      SET status = 'cancelled', 
+          cancelled_at = $1,
+          updated_at = NOW() 
+      WHERE session_id = $2 
+      RETURNING *
+    `, [new Date(), sessionId]);
+
+    const session = res.rows[0];
 
     if (!session) {
       throw new Error('Session not found');
@@ -217,7 +237,8 @@ class PaymentSessionManager {
    * @returns {Promise<Object|null>} Session object or null if not found
    */
   async getSession(sessionId) {
-    return await PaymentSession.findOne({ sessionId });
+    const res = await query('SELECT * FROM payment_sessions WHERE session_id = $1', [sessionId]);
+    return res.rows[0] || null;
   }
 
   /**
@@ -230,12 +251,14 @@ class PaymentSessionManager {
    */
   async getActiveSessionsForStudent(studentId) {
     const now = new Date();
-    
-    return await PaymentSession.find({
-      student: studentId,
-      status: 'active',
-      expiresAt: { $gt: now }
-    }).sort({ createdAt: -1 });
+
+    const res = await query(`
+      SELECT * FROM payment_sessions 
+      WHERE student_id = $1 AND status = 'active' AND expires_at > $2 
+      ORDER BY created_at DESC
+    `, [studentId, now]);
+
+    return res.rows;
   }
 
   /**
@@ -248,20 +271,18 @@ class PaymentSessionManager {
    */
   async cleanupExpiredSessions() {
     const now = new Date();
-    
-    const result = await PaymentSession.updateMany(
-      {
-        status: 'active',
-        expiresAt: { $lt: now }
-      },
-      {
-        status: 'expired'
-      }
-    );
+
+    const res = await query(`
+      UPDATE payment_sessions 
+      SET status = 'expired', 
+          updated_at = NOW() 
+      WHERE status = 'active' AND expires_at < $1
+      RETURNING id
+    `, [now]);
 
     return {
-      modifiedCount: result.modifiedCount,
-      message: `Expired ${result.modifiedCount} sessions`
+      modifiedCount: res.rowCount,
+      message: `Expired ${res.rowCount} sessions`
     };
   }
 
@@ -273,14 +294,11 @@ class PaymentSessionManager {
    * @returns {Promise<Object>} Session statistics
    */
   async getStatistics() {
-    const stats = await PaymentSession.aggregate([
-      {
-        $group: {
-          _id: '$status',
-          count: { $sum: 1 }
-        }
-      }
-    ]);
+    const res = await query(`
+      SELECT status, COUNT(*) as count 
+      FROM payment_sessions 
+      GROUP BY status
+    `);
 
     const result = {
       total: 0,
@@ -290,9 +308,9 @@ class PaymentSessionManager {
       cancelled: 0
     };
 
-    stats.forEach(stat => {
-      result[stat._id] = stat.count;
-      result.total += stat.count;
+    res.rows.forEach(stat => {
+      result[stat.status] = parseInt(stat.count);
+      result.total += parseInt(stat.count);
     });
 
     return result;

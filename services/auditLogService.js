@@ -1,4 +1,4 @@
-const AuditLog = require('../models/auditLogModel');
+const { query } = require('../config/postgres');
 
 /**
  * Audit Log Service
@@ -8,17 +8,6 @@ const AuditLog = require('../models/auditLogModel');
 
 /**
  * Log an audit event
- * 
- * @param {Object} params - Audit event parameters
- * @param {ObjectId} params.userId - ID of user performing the action
- * @param {String} params.action - Action being performed (must match enum in model)
- * @param {String} params.resource - Resource type (exam, submission, result, etc.)
- * @param {ObjectId} params.resourceId - ID of the resource being acted upon
- * @param {Object} params.details - Additional details about the action
- * @param {String} params.ipAddress - IP address of the request
- * @param {String} params.userAgent - User agent string from the request
- * 
- * @returns {Promise<AuditLog>} Created audit log entry
  */
 const logAuditEvent = async ({
   userId,
@@ -32,32 +21,45 @@ const logAuditEvent = async ({
   try {
     // Validate required fields
     if (!userId || !action || !resource || !resourceId || !ipAddress || !userAgent) {
-      console.error('Missing required fields for audit log:', {
-        userId: !!userId,
-        action: !!action,
-        resource: !!resource,
-        resourceId: !!resourceId,
-        ipAddress: !!ipAddress,
-        userAgent: !!userAgent
-      });
-      throw new Error('Missing required fields for audit log');
+      return null;
     }
 
-    // Create audit log entry
-    const auditLog = await AuditLog.create({
-      userId,
-      action,
-      resource,
-      resourceId,
-      details,
-      ipAddress,
-      userAgent
-    });
+    // 1. Log to MongoDB (Legacy Support)
+    try {
+      await AuditLog.create({
+        userId,
+        action,
+        resource,
+        resourceId,
+        details,
+        ipAddress,
+        userAgent
+      });
+    } catch (mongoErr) {
+      console.error('[AuditLog] MongoDB Error:', mongoErr.message);
+    }
 
-    return auditLog;
+    // 2. Log to PostgreSQL (New Primary)
+    try {
+      await query(`
+            INSERT INTO audit_logs (user_id, action, resource, resource_id, details, ip_address, user_agent)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [
+        userId.toString(),
+        action,
+        resource,
+        resourceId.toString(),
+        JSON.stringify(details),
+        ipAddress,
+        userAgent
+      ]);
+    } catch (pgErr) {
+      console.error('[AuditLog] PostgreSQL Error:', pgErr.message);
+    }
+
+    return true;
   } catch (error) {
-    // Log error but don't throw - audit logging should not break main functionality
-    console.error('Error creating audit log:', error);
+    console.error('Error logging audit event:', error);
     return null;
   }
 };

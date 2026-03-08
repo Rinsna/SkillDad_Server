@@ -1,4 +1,4 @@
-const Transaction = require('../../models/payment/Transaction');
+const { query } = require('../../config/postgres');
 
 /**
  * MonitoringService for Payment Integration
@@ -116,10 +116,14 @@ class MonitoringService {
         startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     }
 
-    // Query transactions from database for accurate metrics
-    const transactions = await Transaction.find({
-      initiatedAt: { $gte: startDate }
-    }).select('status initiatedAt completedAt errorCategory paymentMethod');
+    // Query transactions from PostgreSQL
+    const res = await query(`
+        SELECT status, initiated_at, completed_at, error_category, payment_method, final_amount
+        FROM transactions
+        WHERE initiated_at >= $1
+    `, [startDate]);
+
+    const transactions = res.rows;
 
     // Calculate success rate
     const totalAttempts = transactions.length;
@@ -127,9 +131,9 @@ class MonitoringService {
     const successRate = totalAttempts > 0 ? (successfulPayments / totalAttempts) * 100 : 0;
 
     // Calculate average processing time (from initiation to completion)
-    const completedTransactions = transactions.filter(t => t.completedAt && t.initiatedAt);
+    const completedTransactions = transactions.filter(t => t.completed_at && t.initiated_at);
     const totalProcessingTime = completedTransactions.reduce((sum, t) => {
-      const processingTime = t.completedAt.getTime() - t.initiatedAt.getTime();
+      const processingTime = new Date(t.completed_at).getTime() - new Date(t.initiated_at).getTime();
       return sum + processingTime;
     }, 0);
     const avgProcessingTime = completedTransactions.length > 0
@@ -140,14 +144,14 @@ class MonitoringService {
     const failedTransactions = transactions.filter(t => t.status === 'failed');
     const failureDistribution = {};
     failedTransactions.forEach(t => {
-      const category = t.errorCategory || 'other';
+      const category = t.error_category || 'other';
       failureDistribution[category] = (failureDistribution[category] || 0) + 1;
     });
 
     // Calculate payment method distribution
     const paymentMethodDistribution = {};
     transactions.forEach(t => {
-      const method = t.paymentMethod || 'unknown';
+      const method = t.payment_method || 'unknown';
       paymentMethodDistribution[method] = (paymentMethodDistribution[method] || 0) + 1;
     });
 
@@ -257,15 +261,15 @@ class MonitoringService {
   async _checkDatabaseConnectivity() {
     try {
       // Try to count transactions (lightweight query)
-      await Transaction.countDocuments().limit(1);
+      await query('SELECT COUNT(*) FROM transactions LIMIT 1');
       return {
         status: 'pass',
-        message: 'Database is connected and responsive'
+        message: 'PostgreSQL database is connected and responsive'
       };
     } catch (error) {
       return {
         status: 'fail',
-        message: `Database connectivity issue: ${error.message}`
+        message: `PostgreSQL database connectivity issue: ${error.message}`
       };
     }
   }
@@ -313,28 +317,229 @@ class MonitoringService {
    */
   async getRecentTransactions(limit = 50) {
     try {
-      const transactions = await Transaction.find()
-        .sort({ initiatedAt: -1 })
-        .limit(limit)
-        .populate('student', 'name email')
-        .populate('course', 'title')
-        .select('transactionId status finalAmount paymentMethod initiatedAt completedAt errorMessage');
+      const res = await query(`
+        SELECT 
+          t.transaction_id, 
+          t.status, 
+          t.final_amount, 
+          t.payment_method, 
+          t.initiated_at, 
+          t.completed_at, 
+          t.error_message,
+          u.name as student_name,
+          u.email as student_email,
+          c.title as course_title
+        FROM transactions t
+        LEFT JOIN users u ON t.student_id = u.id
+        LEFT JOIN courses c ON t.course_id = c.id
+        ORDER BY t.initiated_at DESC
+        LIMIT $1
+      `, [limit]);
 
-      return transactions.map(t => ({
-        transactionId: t.transactionId,
-        student: t.student ? { name: t.student.name, email: t.student.email } : null,
-        course: t.course ? { title: t.course.title } : null,
+      return res.rows.map(t => ({
+        transactionId: t.transaction_id,
+        student: { name: t.student_name, email: t.student_email },
+        course: { title: t.course_title },
         status: t.status,
-        amount: t.finalAmountFormatted,
-        paymentMethod: t.paymentMethod,
-        initiatedAt: t.initiatedAt,
-        completedAt: t.completedAt,
-        errorMessage: t.errorMessage
+        amount: `₹${parseFloat(t.final_amount).toFixed(2)}`,
+        paymentMethod: t.payment_method,
+        initiatedAt: t.initiated_at,
+        completedAt: t.completed_at,
+        errorMessage: t.error_message
       }));
     } catch (error) {
       console.error('[MonitoringService] Error fetching recent transactions:', error);
       throw error;
     }
+  }
+
+  /**
+   * Get active system alerts
+   * 
+   * @returns {Promise<Array>} Array of active alerts
+   */
+  async getActiveAlerts() {
+    const health = await this.checkSystemHealth();
+    const alerts = [];
+
+    Object.entries(health.checks).forEach(([key, check]) => {
+      if (check.status === 'fail') {
+        alerts.push({
+          type: key,
+          severity: 'high',
+          message: check.message,
+          timestamp: health.timestamp
+        });
+      }
+    });
+
+    // Also check for any security alerts in PostgreSQL
+    try {
+      const res = await query(`
+        SELECT alert_type, severity, message, created_at
+        FROM security_alerts
+        WHERE resolved = false
+        ORDER BY created_at DESC
+        LIMIT 10
+      `);
+
+      res.rows.forEach(row => {
+        alerts.push({
+          type: row.alert_type,
+          severity: row.severity,
+          message: row.message,
+          timestamp: row.created_at
+        });
+      });
+    } catch (error) {
+      console.error('[MonitoringService] Error fetching security alerts:', error);
+    }
+
+    return alerts;
+  }
+
+  /**
+   * Get realtime transaction summary
+   * 
+   * @param {number} limit - Number of recent transactions
+   * @returns {Promise<Object>} Summary with transactions and status counts
+   */
+  async getRealtimeSummary(limit = 20) {
+    const recentTransactions = await this.getRecentTransactions(limit);
+
+    // Get counts by status from PostgreSQL for last 24h
+    const res = await query(`
+        SELECT status, COUNT(*) as count
+        FROM transactions
+        WHERE initiated_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY status
+    `);
+
+    const statusCounts = res.rows.reduce((acc, row) => {
+      acc[row.status] = parseInt(row.count);
+      return acc;
+    }, {});
+
+    return {
+      recentTransactions,
+      statusCounts
+    };
+  }
+
+  /**
+   * Get performance metrics
+   * 
+   * @param {string} timeRange - Time range
+   * @returns {Promise<Object>} Performance metrics
+   */
+  async getPerformanceMetrics(timeRange = '24h') {
+    let interval = '24 hours';
+    if (timeRange === '7d') interval = '7 days';
+    if (timeRange === '30d') interval = '30 days';
+
+    // Calculate processing times from PostgreSQL
+    const res = await query(`
+        SELECT 
+            AVG(EXTRACT(EPOCH FROM (completed_at - initiated_at))) as avg_time,
+            MIN(EXTRACT(EPOCH FROM (completed_at - initiated_at))) as min_time,
+            MAX(EXTRACT(EPOCH FROM (completed_at - initiated_at))) as max_time
+        FROM transactions
+        WHERE status = 'success' 
+        AND completed_at IS NOT NULL 
+        AND initiated_at >= NOW() - INTERVAL '${interval}'
+    `);
+
+    const stats = res.rows[0];
+
+    // Get payment method distribution
+    const distRes = await query(`
+        SELECT 
+            payment_method, 
+            COUNT(*) as count,
+            SUM(final_amount) as total_amount
+        FROM transactions
+        WHERE status = 'success'
+        AND initiated_at >= NOW() - INTERVAL '${interval}'
+        GROUP BY payment_method
+    `);
+
+    return {
+      timeRange,
+      processingTime: {
+        average: parseFloat(stats.avg_time || 0).toFixed(2),
+        min: parseFloat(stats.min_time || 0).toFixed(2),
+        max: parseFloat(stats.max_time || 0).toFixed(2),
+        unit: 'seconds'
+      },
+      paymentMethodDistribution: distRes.rows.map(row => ({
+        method: row.payment_method || 'unknown',
+        count: parseInt(row.count),
+        totalAmount: parseFloat(row.total_amount || 0).toFixed(2)
+      }))
+    };
+  }
+
+  /**
+   * Get failure analysis
+   * 
+   * @param {string} timeRange - Time range
+   * @returns {Promise<Object>} Failure analysis metrics
+   */
+  async getFailureAnalysis(timeRange = '24h') {
+    let interval = '24 hours';
+    if (timeRange === '7d') interval = '7 days';
+    if (timeRange === '30d') interval = '30 days';
+
+    // Get failure reason distribution
+    const distRes = await query(`
+        SELECT 
+            error_category, 
+            COUNT(*) as count,
+            array_agg(error_message ORDER BY initiated_at DESC) as examples
+        FROM transactions
+        WHERE status = 'failed'
+        AND initiated_at >= NOW() - INTERVAL '${interval}'
+        GROUP BY error_category
+    `);
+
+    // Get recent failed transactions
+    const recentFailuresRes = await query(`
+        SELECT 
+            t.transaction_id, 
+            t.status, 
+            t.final_amount, 
+            t.error_category, 
+            t.error_message, 
+            t.initiated_at,
+            u.name as student_name,
+            u.email as student_email,
+            c.title as course_title
+        FROM transactions t
+        LEFT JOIN users u ON t.student_id = u.id
+        LEFT JOIN courses c ON t.course_id = c.id
+        WHERE t.status = 'failed'
+        AND t.initiated_at >= NOW() - INTERVAL '${interval}'
+        ORDER BY t.initiated_at DESC
+        LIMIT 10
+    `);
+
+    return {
+      timeRange,
+      reasonDistribution: distRes.rows.map(row => ({
+        category: row.error_category || 'unknown',
+        count: parseInt(row.count),
+        exampleMessages: (row.examples || []).slice(0, 3)
+      })),
+      recentFailures: recentFailuresRes.rows.map(t => ({
+        transactionId: t.transaction_id,
+        student: { name: t.student_name, email: t.student_email },
+        course: { title: t.course_title },
+        amount: parseFloat(t.final_amount).toFixed(2),
+        errorCategory: t.error_category,
+        errorMessage: t.error_message,
+        initiatedAt: t.initiated_at
+      }))
+    };
   }
 
   /**

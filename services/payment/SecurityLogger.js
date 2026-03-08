@@ -1,5 +1,4 @@
-const AuditLog = require('../../models/payment/AuditLog');
-const SecurityAlert = require('../../models/payment/SecurityAlert');
+const { query } = require('../../config/postgres');
 
 /**
  * SecurityLogger - Handles security and audit logging for payment operations
@@ -9,7 +8,7 @@ const SecurityAlert = require('../../models/payment/SecurityAlert');
  * - Requirement 5.9: Mask sensitive card data in logs
  * - Requirement 14.5: Maintain audit logs for minimum 7 years
  * 
- * All logs are stored in MongoDB with automatic TTL-based deletion after 7 years.
+ * All logs are stored in PostgreSQL.
  */
 class SecurityLogger {
   /**
@@ -24,25 +23,37 @@ class SecurityLogger {
    */
   async logPaymentAttempt(transactionId, userId, ipAddress, userAgent, additionalDetails = {}) {
     try {
-      const auditLog = await AuditLog.create({
-        event: 'payment_attempt',
+      const result = await query(`
+        INSERT INTO audit_logs (
+          action, 
+          entity_id, 
+          user_id, 
+          ip, 
+          user_agent, 
+          changes, 
+          severity, 
+          timestamp
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *
+      `, [
+        'payment_attempt',
         transactionId,
         userId,
         ipAddress,
         userAgent,
-        details: this.maskSensitiveData(additionalDetails),
-        severity: 'info',
-        timestamp: new Date(),
-      });
-      
-      return auditLog;
+        JSON.stringify(this.maskSensitiveData(additionalDetails)),
+        'info',
+        new Date()
+      ]);
+
+      return result.rows[0];
     } catch (error) {
       console.error('Error logging payment attempt:', error);
       // Don't throw - logging failures shouldn't break payment flow
       return null;
     }
   }
-  
+
   /**
    * Log a signature verification failure (security alert)
    * 
@@ -55,42 +66,64 @@ class SecurityLogger {
   async logSignatureFailure(endpoint, data, ipAddress, description = 'Signature verification failed') {
     try {
       // Create security alert
-      const alert = await SecurityAlert.create({
-        severity: 'high',
-        event: 'signature_verification_failed',
+      const alertRes = await query(`
+        INSERT INTO security_alerts (
+          severity, 
+          event, 
+          endpoint, 
+          ip_address, 
+          data, 
+          description, 
+          status, 
+          timestamp
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *
+      `, [
+        'high',
+        'signature_verification_failed',
         endpoint,
         ipAddress,
-        data: this.maskSensitiveData(data),
+        JSON.stringify(this.maskSensitiveData(data)),
         description,
-        status: 'open',
-        timestamp: new Date(),
-      });
-      
+        'open',
+        new Date()
+      ]);
+
+      const alert = alertRes.rows[0];
+
       // Also create audit log entry
-      await AuditLog.create({
-        event: 'signature_verification_failed',
+      await query(`
+        INSERT INTO audit_logs (
+          action, 
+          ip, 
+          changes, 
+          severity, 
+          timestamp
+        ) VALUES ($1, $2, $3, $4, $5)
+      `, [
+        'signature_verification_failed',
         ipAddress,
-        details: {
+        JSON.stringify({
           endpoint,
           description,
-          alertId: alert._id,
-        },
-        severity: 'critical',
-        timestamp: new Date(),
-      });
-      
+          alertId: alert.id,
+        }),
+        'critical',
+        new Date()
+      ]);
+
       // Send alert notification (async, don't wait)
       this.sendSecurityAlert(alert).catch(err => {
         console.error('Error sending security alert:', err);
       });
-      
+
       return alert;
     } catch (error) {
       console.error('Error logging signature failure:', error);
       return null;
     }
   }
-  
+
   /**
    * Log a refund operation
    * 
@@ -103,26 +136,36 @@ class SecurityLogger {
    */
   async logRefundOperation(transactionId, adminId, amount, reason, additionalDetails = {}) {
     try {
-      const auditLog = await AuditLog.create({
-        event: 'refund_processed',
+      const result = await query(`
+        INSERT INTO audit_logs (
+          action, 
+          entity_id, 
+          user_id, 
+          changes, 
+          severity, 
+          timestamp
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+      `, [
+        'refund_processed',
         transactionId,
-        userId: adminId,
-        details: {
+        adminId,
+        JSON.stringify({
           amount,
           reason,
           ...additionalDetails,
-        },
-        severity: 'warning',
-        timestamp: new Date(),
-      });
-      
-      return auditLog;
+        }),
+        'warning',
+        new Date()
+      ]);
+
+      return result.rows[0];
     } catch (error) {
       console.error('Error logging refund operation:', error);
       return null;
     }
   }
-  
+
   /**
    * Log a payment success
    * 
@@ -133,22 +176,32 @@ class SecurityLogger {
    */
   async logPaymentSuccess(transactionId, userId, paymentDetails = {}) {
     try {
-      const auditLog = await AuditLog.create({
-        event: 'payment_success',
+      const result = await query(`
+        INSERT INTO audit_logs (
+          action, 
+          entity_id, 
+          user_id, 
+          changes, 
+          severity, 
+          timestamp
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+      `, [
+        'payment_success',
         transactionId,
         userId,
-        details: this.maskSensitiveData(paymentDetails),
-        severity: 'info',
-        timestamp: new Date(),
-      });
-      
-      return auditLog;
+        JSON.stringify(this.maskSensitiveData(paymentDetails)),
+        'info',
+        new Date()
+      ]);
+
+      return result.rows[0];
     } catch (error) {
       console.error('Error logging payment success:', error);
       return null;
     }
   }
-  
+
   /**
    * Log a payment failure
    * 
@@ -161,26 +214,36 @@ class SecurityLogger {
    */
   async logPaymentFailure(transactionId, userId, errorCode, errorMessage, additionalDetails = {}) {
     try {
-      const auditLog = await AuditLog.create({
-        event: 'payment_failure',
+      const result = await query(`
+        INSERT INTO audit_logs (
+          action, 
+          entity_id, 
+          user_id, 
+          changes, 
+          severity, 
+          timestamp
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+      `, [
+        'payment_failure',
         transactionId,
         userId,
-        details: {
+        JSON.stringify({
           errorCode,
           errorMessage,
           ...this.maskSensitiveData(additionalDetails),
-        },
-        severity: 'warning',
-        timestamp: new Date(),
-      });
-      
-      return auditLog;
+        }),
+        'warning',
+        new Date()
+      ]);
+
+      return result.rows[0];
     } catch (error) {
       console.error('Error logging payment failure:', error);
       return null;
     }
   }
-  
+
   /**
    * Mask sensitive data in logs
    * 
@@ -195,10 +258,10 @@ class SecurityLogger {
     if (!data || typeof data !== 'object') {
       return data;
     }
-    
+
     // Create a deep copy to avoid modifying original
     const masked = JSON.parse(JSON.stringify(data));
-    
+
     // Fields to completely remove
     const fieldsToRemove = [
       'cvv',
@@ -214,30 +277,30 @@ class SecurityLogger {
       'accessToken',
       'refreshToken',
     ];
-    
+
     // Fields to mask (show only last 4 digits)
     const fieldsToMask = [
       'cardNumber',
       'accountNumber',
       'iban',
     ];
-    
+
     // Recursively process the object
     const processObject = (obj) => {
       if (!obj || typeof obj !== 'object') {
         return obj;
       }
-      
+
       for (const key in obj) {
         if (obj.hasOwnProperty(key)) {
           const lowerKey = key.toLowerCase();
-          
+
           // Remove sensitive fields
           if (fieldsToRemove.some(field => lowerKey.includes(field.toLowerCase()))) {
             delete obj[key];
             continue;
           }
-          
+
           // Mask card numbers and similar fields
           if (fieldsToMask.some(field => lowerKey.includes(field.toLowerCase()))) {
             if (typeof obj[key] === 'string' && obj[key].length >= 4) {
@@ -247,7 +310,7 @@ class SecurityLogger {
             }
             continue;
           }
-          
+
           // Recursively process nested objects and arrays
           if (typeof obj[key] === 'object' && obj[key] !== null) {
             if (Array.isArray(obj[key])) {
@@ -258,13 +321,13 @@ class SecurityLogger {
           }
         }
       }
-      
+
       return obj;
     };
-    
+
     return processObject(masked);
   }
-  
+
   /**
    * Send security alert notification to administrators
    * 
@@ -276,16 +339,16 @@ class SecurityLogger {
     try {
       // Import email service
       const sendEmail = require('../../utils/sendEmail');
-      
+
       // Get admin users
-      const User = require('../../models/userModel');
-      const admins = await User.find({ role: 'admin' }).select('email name');
-      
+      const adminsRes = await query("SELECT id, email, name FROM users WHERE role = 'admin'");
+      const admins = adminsRes.rows;
+
       if (admins.length === 0) {
         console.warn('No admin users found to send security alert');
         return;
       }
-      
+
       // Prepare email content
       const subject = `Security Alert: ${alert.event}`;
       const message = `
@@ -300,7 +363,7 @@ class SecurityLogger {
         <p>Please investigate this security alert immediately.</p>
         <p>Alert ID: ${alert._id}</p>
       `;
-      
+
       // Send email to all admins
       for (const admin of admins) {
         try {
@@ -313,21 +376,21 @@ class SecurityLogger {
           console.error(`Failed to send alert to ${admin.email}:`, emailError);
         }
       }
-      
+
       // Mark notification as sent
-      await SecurityAlert.updateOne(
-        { _id: alert._id },
-        {
-          notificationSent: true,
-          notificationSentAt: new Date(),
-        }
-      );
+      await query(`
+        UPDATE security_alerts 
+        SET notification_sent = TRUE, 
+            notification_sent_at = $1,
+            updated_at = $1
+        WHERE id = $2
+      `, [new Date(), alert.id]);
     } catch (error) {
       console.error('Error sending security alert:', error);
       // Don't throw - notification failures shouldn't break the flow
     }
   }
-  
+
   /**
    * Get audit logs for a specific transaction
    * 
@@ -336,17 +399,19 @@ class SecurityLogger {
    */
   async getTransactionLogs(transactionId) {
     try {
-      const logs = await AuditLog.find({ transactionId })
-        .sort({ timestamp: 1 })
-        .lean();
-      
-      return logs;
+      const result = await query(`
+        SELECT * FROM audit_logs 
+        WHERE entity_id = $1 
+        ORDER BY timestamp ASC
+      `, [transactionId]);
+
+      return result.rows;
     } catch (error) {
       console.error('Error fetching transaction logs:', error);
       return [];
     }
   }
-  
+
   /**
    * Get audit logs for a specific user
    * 
@@ -358,43 +423,52 @@ class SecurityLogger {
     try {
       const {
         limit = 50,
-        skip = 0,
+        offset = 0,
         startDate,
         endDate,
       } = options;
-      
-      const query = { userId };
-      
-      if (startDate || endDate) {
-        query.timestamp = {};
-        if (startDate) query.timestamp.$gte = new Date(startDate);
-        if (endDate) query.timestamp.$lte = new Date(endDate);
+
+      let queryText = 'SELECT * FROM audit_logs WHERE user_id = $1';
+      const params = [userId];
+      let paramCount = 1;
+
+      if (startDate) {
+        paramCount++;
+        queryText += ` AND timestamp >= $${paramCount}`;
+        params.push(new Date(startDate));
       }
-      
-      const [logs, total] = await Promise.all([
-        AuditLog.find(query)
-          .sort({ timestamp: -1 })
-          .limit(limit)
-          .skip(skip)
-          .lean(),
-        AuditLog.countDocuments(query),
+
+      if (endDate) {
+        paramCount++;
+        queryText += ` AND timestamp <= $${paramCount}`;
+        params.push(new Date(endDate));
+      }
+
+      queryText += ` ORDER BY timestamp DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
+      params.push(limit, offset);
+
+      const [logsRes, countRes] = await Promise.all([
+        query(queryText, params),
+        query('SELECT COUNT(*) FROM audit_logs WHERE user_id = $1', [userId])
       ]);
-      
+
+      const total = parseInt(countRes.rows[0].count);
+
       return {
-        logs,
+        logs: logsRes.rows,
         pagination: {
           total,
           limit,
-          skip,
-          hasMore: skip + logs.length < total,
+          offset,
+          hasMore: offset + logsRes.rows.length < total,
         },
       };
     } catch (error) {
       console.error('Error fetching user logs:', error);
-      return { logs: [], pagination: { total: 0, limit, skip, hasMore: false } };
+      return { logs: [], pagination: { total: 0, limit, offset: options.skip || 0, hasMore: false } };
     }
   }
-  
+
   /**
    * Get security alerts
    * 
@@ -410,45 +484,62 @@ class SecurityLogger {
         startDate,
         endDate,
       } = filters;
-      
+
       const {
         limit = 50,
-        skip = 0,
+        offset = 0,
       } = options;
-      
-      const query = {};
-      
-      if (severity) query.severity = severity;
-      if (status) query.status = status;
-      
-      if (startDate || endDate) {
-        query.timestamp = {};
-        if (startDate) query.timestamp.$gte = new Date(startDate);
-        if (endDate) query.timestamp.$lte = new Date(endDate);
+
+      let queryText = 'SELECT * FROM security_alerts WHERE 1=1';
+      const params = [];
+      let paramCount = 0;
+
+      if (severity) {
+        paramCount++;
+        queryText += ` AND severity = $${paramCount}`;
+        params.push(severity);
       }
-      
-      const [alerts, total] = await Promise.all([
-        SecurityAlert.find(query)
-          .sort({ timestamp: -1 })
-          .limit(limit)
-          .skip(skip)
-          .populate('resolvedBy', 'name email')
-          .lean(),
-        SecurityAlert.countDocuments(query),
+
+      if (status) {
+        paramCount++;
+        queryText += ` AND status = $${paramCount}`;
+        params.push(status);
+      }
+
+      if (startDate) {
+        paramCount++;
+        queryText += ` AND timestamp >= $${paramCount}`;
+        params.push(new Date(startDate));
+      }
+
+      if (endDate) {
+        paramCount++;
+        queryText += ` AND timestamp <= $${paramCount}`;
+        params.push(new Date(endDate));
+      }
+
+      queryText += ` ORDER BY timestamp DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
+      params.push(limit, offset);
+
+      const [alertsRes, countRes] = await Promise.all([
+        query(queryText, params),
+        query('SELECT COUNT(*) FROM security_alerts')
       ]);
-      
+
+      const total = parseInt(countRes.rows[0].count);
+
       return {
-        alerts,
+        alerts: alertsRes.rows,
         pagination: {
           total,
           limit,
-          skip,
-          hasMore: skip + alerts.length < total,
+          offset,
+          hasMore: offset + alertsRes.rows.length < total,
         },
       };
     } catch (error) {
       console.error('Error fetching security alerts:', error);
-      return { alerts: [], pagination: { total: 0, limit, skip, hasMore: false } };
+      return { alerts: [], pagination: { total: 0, limit, offset, hasMore: false } };
     }
   }
 }

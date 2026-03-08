@@ -1,21 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { validationResult } = require('express-validator');
-
-// Import authentication middleware
 const { protect, authorize } = require('../middleware/authMiddleware');
-
-// Import validation rules
-const {
-  reconciliationValidation,
-  resolveDiscrepancyValidation,
-} = require('../middleware/paymentValidation');
-
-// Import rate limiting middleware
-const {
-  reconciliationLimiter,
-  configLimiter,
-} = require('../middleware/rateLimiting');
+const { reconciliationValidation, resolveDiscrepancyValidation } = require('../middleware/paymentValidation');
+const { reconciliationLimiter, configLimiter } = require('../middleware/rateLimiting');
+const ReconciliationService = require('../services/payment/ReconciliationService');
+const reconciliationService = new ReconciliationService();
 
 /**
  * Validation error handler middleware
@@ -54,31 +44,26 @@ router.post(
   handleValidationErrors,
   async (req, res) => {
     try {
-      const ReconciliationService = require('../services/payment/ReconciliationService');
-
       const { startDate, endDate } = req.body;
 
-      // Initialize services
-      const reconciliationService = new ReconciliationService();
-
-      // Start reconciliation process (async)
+      // Start reconciliation process
       const reconciliation = await reconciliationService.reconcileTransactions(
         new Date(startDate),
         new Date(endDate),
-        req.user._id
+        req.user.id
       );
 
       res.json({
         success: true,
-        reconciliationId: reconciliation._id,
+        reconciliationId: reconciliation.id,
         status: reconciliation.status,
-        message: 'Reconciliation process started',
+        message: 'Reconciliation process completed',
       });
     } catch (error) {
       console.error('Reconciliation run error:', error);
       res.status(500).json({
         success: false,
-        message: 'Failed to start reconciliation process',
+        message: 'Failed to run reconciliation process',
         error: error.message,
       });
     }
@@ -98,11 +83,8 @@ router.get(
   configLimiter,
   async (req, res) => {
     try {
-      const Reconciliation = require('../models/payment/Reconciliation');
-
-      const reconciliation = await Reconciliation.findById(req.params.reconciliationId)
-        .populate('performedBy', 'name email')
-        .lean();
+      const reconciliationId = req.params.reconciliationId;
+      const reconciliation = await reconciliationService.getReconciliationReport(reconciliationId);
 
       if (!reconciliation) {
         return res.status(404).json({
@@ -119,32 +101,40 @@ router.get(
       res.json({
         success: true,
         report: {
-          reconciliationId: reconciliation._id,
-          reconciliationDate: reconciliation.reconciliationDate,
-          startDate: reconciliation.startDate,
-          endDate: reconciliation.endDate,
+          reconciliationId: reconciliation.id,
+          reconciliationDate: reconciliation.created_at,
+          startDate: reconciliation.start_date,
+          endDate: reconciliation.end_date,
           summary: {
-            totalTransactions: reconciliation.totalTransactions,
-            matchedTransactions: reconciliation.matchedTransactions,
-            unmatchedTransactions: reconciliation.unmatchedTransactions,
-            totalAmount: formatAmount(reconciliation.totalAmount),
-            settledAmount: formatAmount(reconciliation.settledAmount),
-            pendingAmount: formatAmount(reconciliation.pendingAmount),
+            totalTransactions: reconciliation.total_transactions,
+            matchedTransactions: reconciliation.matched_transactions,
+            unmatchedTransactions: reconciliation.unmatched_transactions,
+            totalAmount: formatAmount(reconciliation.total_amount),
+            settledAmount: formatAmount(reconciliation.settled_amount),
+            refundedAmount: formatAmount(reconciliation.refunded_amount),
+            netSettlementAmount: formatAmount(reconciliation.net_settlement_amount),
           },
-          discrepancies: reconciliation.discrepancies.map(disc => ({
+          discrepancies: (reconciliation.discrepancies || []).map(disc => ({
             transactionId: disc.transactionId,
             type: disc.type,
             systemAmount: formatAmount(disc.systemAmount),
             gatewayAmount: formatAmount(disc.gatewayAmount),
+            systemStatus: disc.systemStatus,
+            gatewayStatus: disc.gatewayStatus,
             resolved: disc.resolved,
             resolvedBy: disc.resolvedBy,
             resolvedAt: disc.resolvedAt,
             notes: disc.notes,
+            description: disc.description
           })),
-          reportUrl: reconciliation.reportUrl,
-          performedBy: reconciliation.performedBy,
+          reportUrl: reconciliation.report_url,
+          performedBy: {
+            id: reconciliation.performed_by,
+            name: reconciliation.performed_by_name,
+            email: reconciliation.performed_by_email
+          },
           status: reconciliation.status,
-          createdAt: reconciliation.createdAt,
+          createdAt: reconciliation.created_at,
         },
       });
     } catch (error) {
@@ -170,40 +160,33 @@ router.get(
   configLimiter,
   async (req, res) => {
     try {
-      const Reconciliation = require('../models/payment/Reconciliation');
-
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 10;
-      const skip = (page - 1) * limit;
 
-      const [reconciliations, total] = await Promise.all([
-        Reconciliation.find()
-          .populate('performedBy', 'name email')
-          .sort({ reconciliationDate: -1 })
-          .skip(skip)
-          .limit(limit)
-          .lean(),
-        Reconciliation.countDocuments(),
-      ]);
+      const result = await reconciliationService.listReconciliations(page, limit);
 
       res.json({
         success: true,
-        reconciliations: reconciliations.map(rec => ({
-          reconciliationId: rec._id,
-          reconciliationDate: rec.reconciliationDate,
-          startDate: rec.startDate,
-          endDate: rec.endDate,
-          totalTransactions: rec.totalTransactions,
-          matchedTransactions: rec.matchedTransactions,
-          unmatchedTransactions: rec.unmatchedTransactions,
+        reconciliations: result.reconciliations.map(rec => ({
+          reconciliationId: rec.id,
+          reconciliationDate: rec.created_at,
+          startDate: rec.start_date,
+          endDate: rec.end_date,
+          totalTransactions: rec.total_transactions,
+          matchedTransactions: rec.matched_transactions,
+          unmatchedTransactions: rec.unmatched_transactions,
           status: rec.status,
-          performedBy: rec.performedBy,
-          createdAt: rec.createdAt,
+          performedBy: {
+            id: rec.performed_by,
+            name: rec.performed_by_name,
+            email: rec.performed_by_email
+          },
+          createdAt: rec.created_at,
         })),
         pagination: {
           currentPage: page,
-          totalPages: Math.ceil(total / limit),
-          totalItems: total,
+          totalPages: Math.ceil(result.total / limit),
+          totalItems: result.total,
           itemsPerPage: limit,
         },
       });
@@ -232,53 +215,14 @@ router.post(
   handleValidationErrors,
   async (req, res) => {
     try {
-      const Reconciliation = require('../models/payment/Reconciliation');
       const { reconciliationId, transactionId, notes } = req.body;
 
-      const reconciliation = await Reconciliation.findById(reconciliationId);
-
-      if (!reconciliation) {
-        return res.status(404).json({
-          success: false,
-          message: 'Reconciliation report not found',
-        });
-      }
-
-      // Find the discrepancy
-      const discrepancy = reconciliation.discrepancies.find(
-        disc => disc.transactionId === transactionId
-      );
-
-      if (!discrepancy) {
-        return res.status(404).json({
-          success: false,
-          message: 'Discrepancy not found in this reconciliation report',
-        });
-      }
-
-      if (discrepancy.resolved) {
-        return res.status(400).json({
-          success: false,
-          message: 'This discrepancy has already been resolved',
-        });
-      }
-
-      // Mark as resolved
-      discrepancy.resolved = true;
-      discrepancy.resolvedBy = req.user._id;
-      discrepancy.resolvedAt = new Date();
-      discrepancy.notes = notes;
-
-      await reconciliation.save();
-
-      // Log the resolution
-      console.log('Discrepancy resolved:', {
+      await reconciliationService.resolveDiscrepancy(
         reconciliationId,
         transactionId,
-        resolvedBy: req.user.email,
         notes,
-        timestamp: new Date(),
-      });
+        req.user.id
+      );
 
       res.json({
         success: true,
@@ -288,7 +232,7 @@ router.post(
       console.error('Resolve discrepancy error:', error);
       res.status(500).json({
         success: false,
-        message: 'Failed to resolve discrepancy',
+        message: error.message || 'Failed to resolve discrepancy',
       });
     }
   }
@@ -307,10 +251,8 @@ router.get(
   configLimiter,
   async (req, res) => {
     try {
-      const ReconciliationService = require('../services/payment/ReconciliationService');
-      const Reconciliation = require('../models/payment/Reconciliation');
-
-      const reconciliation = await Reconciliation.findById(req.params.reconciliationId);
+      const reconciliationId = req.params.reconciliationId;
+      const reconciliation = await reconciliationService.getReconciliationReport(reconciliationId);
 
       if (!reconciliation) {
         return res.status(404).json({
@@ -319,13 +261,11 @@ router.get(
         });
       }
 
-      const reconciliationService = new ReconciliationService();
-
       // Generate export file
       const format = req.query.format || 'csv'; // csv or excel
       const reportUrl = await reconciliationService.generateReconciliationReport(
-        reconciliation.startDate,
-        reconciliation.endDate,
+        reconciliation.start_date,
+        reconciliation.end_date,
         format
       );
 

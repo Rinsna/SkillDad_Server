@@ -30,7 +30,7 @@ function shuffleQuestions(questions, shouldShuffle) {
   if (!shouldShuffle || !questions || questions.length === 0) {
     return questions;
   }
-  
+
   return shuffleArray(questions);
 }
 
@@ -46,7 +46,7 @@ function randomizeMCQOptions(question) {
 
   // Create a copy of the question
   const questionCopy = JSON.parse(JSON.stringify(question));
-  
+
   // Store original indices
   const optionsWithIndices = questionCopy.options.map((opt, index) => ({
     ...opt,
@@ -91,21 +91,21 @@ function processQuestionsForDelivery(questions, examConfig) {
   // Randomize MCQ options and sanitize
   processedQuestions = processedQuestions.map(q => {
     const questionObj = q.toObject ? q.toObject() : q;
-    
+
     // Randomize MCQ options
     if (questionObj.questionType === 'mcq') {
       const randomized = randomizeMCQOptions(questionObj);
-      
+
       // Remove sensitive data
       delete randomized.optionMapping; // Don't send to client
       randomized.options = randomized.options.map(opt => ({
         text: opt.text
         // isCorrect is already removed
       }));
-      
+
       return randomized;
     }
-    
+
     return questionObj;
   });
 
@@ -206,22 +206,31 @@ function validateSubmissionIntegrity(submission, exam) {
   return { valid: true };
 }
 
+const { query } = require('../config/postgres');
+
 /**
- * Get exam access statistics for monitoring
+ * Get exam access statistics for monitoring using PostgreSQL
  * @param {string} examId - Exam ID
  * @returns {Promise<Object>} Access statistics
  */
 async function getExamAccessStats(examId) {
   try {
-    const stats = await auditLogService.getAuditLogs({
-      resource: 'exam',
-      resourceId: examId,
-      action: { $in: ['exam_access_granted', 'exam_access_denied', 'exam_started'] }
+    const statsRes = await query(`
+      SELECT action, COUNT(*) as count
+      FROM audit_logs
+      WHERE resource = 'exam' AND resource_id = $1
+      AND action IN ('exam_access_granted', 'exam_access_denied', 'exam_started')
+      GROUP BY action
+    `, [examId]);
+
+    const statsMap = {};
+    statsRes.rows.forEach(row => {
+      statsMap[row.action] = parseInt(row.count);
     });
 
-    const accessGranted = stats.filter(s => s.action === 'exam_access_granted').length;
-    const accessDenied = stats.filter(s => s.action === 'exam_access_denied').length;
-    const examStarted = stats.filter(s => s.action === 'exam_started').length;
+    const accessGranted = statsMap['exam_access_granted'] || 0;
+    const accessDenied = statsMap['exam_access_denied'] || 0;
+    const examStarted = statsMap['exam_started'] || 0;
 
     return {
       accessGranted,
@@ -230,7 +239,7 @@ async function getExamAccessStats(examId) {
       totalAttempts: accessGranted + accessDenied
     };
   } catch (error) {
-    console.error('Error getting exam access stats:', error);
+    console.error('Error getting exam access stats (PG):', error);
     return {
       accessGranted: 0,
       accessDenied: 0,
@@ -251,7 +260,7 @@ function detectSuspiciousActivity(submission) {
   // Check for rapid answer changes
   if (submission.answerChanges && submission.answerChanges.length > 0) {
     const changes = submission.answerChanges;
-    
+
     // Group changes by question
     const changesByQuestion = {};
     changes.forEach(change => {
@@ -276,7 +285,7 @@ function detectSuspiciousActivity(submission) {
 
     // Check for rapid consecutive changes (< 2 seconds apart)
     for (let i = 1; i < changes.length; i++) {
-      const timeDiff = new Date(changes[i].changedAt) - new Date(changes[i-1].changedAt);
+      const timeDiff = new Date(changes[i].changedAt) - new Date(changes[i - 1].changedAt);
       if (timeDiff < 2000) { // Less than 2 seconds
         flags.push({
           type: 'rapid_changes',
@@ -291,7 +300,7 @@ function detectSuspiciousActivity(submission) {
   if (submission.submittedAt && submission.startedAt) {
     const timeSpent = (new Date(submission.submittedAt) - new Date(submission.startedAt)) / 1000;
     const expectedMinTime = submission.answers.length * 30; // 30 seconds per question minimum
-    
+
     if (timeSpent < expectedMinTime) {
       flags.push({
         type: 'fast_completion',

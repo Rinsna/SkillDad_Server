@@ -11,6 +11,8 @@ const { metricsValidation } = require('../middleware/paymentValidation');
 // Import rate limiting middleware
 const { monitoringLimiter } = require('../middleware/rateLimiting');
 
+const monitoringService = require('../services/payment/MonitoringService');
+
 /**
  * Validation error handler middleware
  */
@@ -48,9 +50,6 @@ router.get(
   handleValidationErrors,
   async (req, res) => {
     try {
-      const MonitoringService = require('../services/payment/MonitoringService');
-      const monitoringService = new MonitoringService();
-
       const timeRange = req.query.timeRange || '24h';
 
       // Get metrics for the specified time range
@@ -84,9 +83,6 @@ router.get(
   monitoringLimiter,
   async (req, res) => {
     try {
-      const MonitoringService = require('../services/payment/MonitoringService');
-      const monitoringService = new MonitoringService();
-
       // Check system health
       const health = await monitoringService.checkSystemHealth();
 
@@ -118,9 +114,6 @@ router.get(
   monitoringLimiter,
   async (req, res) => {
     try {
-      const MonitoringService = require('../services/payment/MonitoringService');
-      const monitoringService = new MonitoringService();
-
       // Get active alerts
       const alerts = await monitoringService.getActiveAlerts();
 
@@ -152,50 +145,15 @@ router.get(
   monitoringLimiter,
   async (req, res) => {
     try {
-      const Transaction = require('../models/payment/Transaction');
-
       const limit = parseInt(req.query.limit) || 20;
 
-      // Get recent transactions
-      const recentTransactions = await Transaction.find()
-        .populate('student', 'name email')
-        .populate('course', 'title')
-        .sort({ initiatedAt: -1 })
-        .limit(limit)
-        .select('transactionId status finalAmount paymentMethod initiatedAt completedAt')
-        .lean();
-
-      // Get counts by status
-      const statusCounts = await Transaction.aggregate([
-        {
-          $match: {
-            initiatedAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }, // Last 24 hours
-          },
-        },
-        {
-          $group: {
-            _id: '$status',
-            count: { $sum: 1 },
-          },
-        },
-      ]);
+      // Get realtime transaction data
+      const summary = await monitoringService.getRealtimeSummary(limit);
 
       res.json({
         success: true,
-        recentTransactions: recentTransactions.map(txn => ({
-          transactionId: txn.transactionId,
-          student: txn.student,
-          course: txn.course,
-          amount: parseFloat(txn.finalAmount.toString()).toFixed(2),
-          status: txn.status,
-          paymentMethod: txn.paymentMethod,
-          initiatedAt: txn.initiatedAt,
-          completedAt: txn.completedAt,
-        })),
-        statusCounts: statusCounts.reduce((acc, item) => {
-          acc[item._id] = item.count;
-          return acc;
-        }, {}),
+        recentTransactions: summary.recentTransactions,
+        statusCounts: summary.statusCounts
       });
     } catch (error) {
       console.error('Get realtime transactions error:', error);
@@ -220,81 +178,14 @@ router.get(
   monitoringLimiter,
   async (req, res) => {
     try {
-      const Transaction = require('../models/payment/Transaction');
-
       const timeRange = req.query.timeRange || '24h';
-      let startDate;
 
-      switch (timeRange) {
-        case '24h':
-          startDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
-          break;
-        case '7d':
-          startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-          break;
-        case '30d':
-          startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-          break;
-        default:
-          startDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      }
-
-      // Calculate average processing time
-      const completedTransactions = await Transaction.find({
-        status: 'success',
-        initiatedAt: { $gte: startDate },
-        completedAt: { $exists: true },
-      }).select('initiatedAt completedAt');
-
-      const processingTimes = completedTransactions.map(txn => {
-        return (new Date(txn.completedAt) - new Date(txn.initiatedAt)) / 1000; // in seconds
-      });
-
-      const avgProcessingTime = processingTimes.length > 0
-        ? processingTimes.reduce((a, b) => a + b, 0) / processingTimes.length
-        : 0;
-
-      const minProcessingTime = processingTimes.length > 0
-        ? Math.min(...processingTimes)
-        : 0;
-
-      const maxProcessingTime = processingTimes.length > 0
-        ? Math.max(...processingTimes)
-        : 0;
-
-      // Get payment method distribution
-      const paymentMethodDistribution = await Transaction.aggregate([
-        {
-          $match: {
-            status: 'success',
-            initiatedAt: { $gte: startDate },
-          },
-        },
-        {
-          $group: {
-            _id: '$paymentMethod',
-            count: { $sum: 1 },
-            totalAmount: { $sum: { $toDouble: '$finalAmount' } },
-          },
-        },
-      ]);
+      // Get performance metrics
+      const performance = await monitoringService.getPerformanceMetrics(timeRange);
 
       res.json({
         success: true,
-        performance: {
-          timeRange,
-          processingTime: {
-            average: avgProcessingTime.toFixed(2),
-            min: minProcessingTime.toFixed(2),
-            max: maxProcessingTime.toFixed(2),
-            unit: 'seconds',
-          },
-          paymentMethodDistribution: paymentMethodDistribution.map(item => ({
-            method: item._id || 'unknown',
-            count: item.count,
-            totalAmount: item.totalAmount.toFixed(2),
-          })),
-        },
+        performance
       });
     } catch (error) {
       console.error('Get performance metrics error:', error);
@@ -319,73 +210,14 @@ router.get(
   monitoringLimiter,
   async (req, res) => {
     try {
-      const Transaction = require('../models/payment/Transaction');
-
       const timeRange = req.query.timeRange || '24h';
-      let startDate;
 
-      switch (timeRange) {
-        case '24h':
-          startDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
-          break;
-        case '7d':
-          startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-          break;
-        case '30d':
-          startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-          break;
-        default:
-          startDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      }
-
-      // Get failure reasons distribution
-      const failureReasons = await Transaction.aggregate([
-        {
-          $match: {
-            status: 'failed',
-            initiatedAt: { $gte: startDate },
-          },
-        },
-        {
-          $group: {
-            _id: '$errorCategory',
-            count: { $sum: 1 },
-            examples: { $push: '$errorMessage' },
-          },
-        },
-      ]);
-
-      // Get recent failed transactions
-      const recentFailures = await Transaction.find({
-        status: 'failed',
-        initiatedAt: { $gte: startDate },
-      })
-        .populate('student', 'name email')
-        .populate('course', 'title')
-        .sort({ initiatedAt: -1 })
-        .limit(10)
-        .select('transactionId student course finalAmount errorCategory errorMessage initiatedAt')
-        .lean();
+      // Get failure analysis
+      const failures = await monitoringService.getFailureAnalysis(timeRange);
 
       res.json({
         success: true,
-        failures: {
-          timeRange,
-          reasonDistribution: failureReasons.map(item => ({
-            category: item._id || 'unknown',
-            count: item.count,
-            exampleMessages: item.examples.slice(0, 3), // First 3 examples
-          })),
-          recentFailures: recentFailures.map(txn => ({
-            transactionId: txn.transactionId,
-            student: txn.student,
-            course: txn.course,
-            amount: parseFloat(txn.finalAmount.toString()).toFixed(2),
-            errorCategory: txn.errorCategory,
-            errorMessage: txn.errorMessage,
-            initiatedAt: txn.initiatedAt,
-          })),
-        },
+        failures
       });
     } catch (error) {
       console.error('Get failure analysis error:', error);

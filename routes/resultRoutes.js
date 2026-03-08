@@ -8,7 +8,7 @@ const resultController = require('../controllers/resultController');
 // ============================================
 
 // @desc    Publish results for an exam
-// @route   POST /api/exams/:examId/publish-results
+// @route   POST /api/results/exams/:examId/publish-results
 // @access  Private (University/Admin)
 router.post(
     '/exams/:examId/publish-results',

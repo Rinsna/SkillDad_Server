@@ -1,55 +1,46 @@
-const ExamSubmissionNew = require('../models/examSubmissionNewModel');
-const Exam = require('../models/examModel');
-const Result = require('../models/resultModel');
-const mongoose = require('mongoose');
+const { query } = require('../config/postgres');
 
 /**
- * Generates results for all graded submissions in an exam
- * Calculates rankings with tie handling
+ * Generates results for all graded submissions in an exam using PostgreSQL
  * 
- * @param {ObjectId} examId - The exam to generate results for
- * @returns {Array} Array of generated results
+ * @param {string} examId - The exam to generate results for
  */
 async function generateExamResults(examId) {
-  // Step 1: Fetch exam
-  const exam = await Exam.findById(examId);
+  // 1. Fetch exam
+  const examRes = await query('SELECT * FROM exams WHERE id = $1', [examId]);
+  const exam = examRes.rows[0];
   if (!exam) {
     throw new Error('Exam not found');
   }
-  
-  // Step 2: Fetch all graded submissions, sorted by obtainedMarks descending
-  const submissions = await ExamSubmissionNew.find({
-    exam: examId,
-    status: 'graded'
-  }).sort({ obtainedMarks: -1 });
-  
-  if (submissions.length === 0) {
-    return [];
-  }
-  
-  // Step 3: Calculate rankings with tie handling
+
+  // 2. Fetch all graded submissions
+  const subRes = await query(`
+    SELECT * FROM exam_submissions_new 
+    WHERE exam_id = $1 AND status = 'graded' 
+    ORDER BY obtained_marks DESC
+  `, [examId]);
+
+  const submissions = subRes.rows;
+  if (submissions.length === 0) return [];
+
+  const results = [];
   let currentRank = 1;
   let studentsWithSameMarks = 0;
   let previousMarks = null;
-  
-  const results = [];
-  
+
   for (let i = 0; i < submissions.length; i++) {
-    const submission = submissions[i];
-    
-    // Check if marks are same as previous student
-    if (previousMarks !== null && submission.obtainedMarks === previousMarks) {
+    const sub = submissions[i];
+
+    // Rank logic
+    if (previousMarks !== null && parseFloat(sub.obtained_marks) === previousMarks) {
       studentsWithSameMarks++;
     } else {
-      // New marks group - update rank
       currentRank += studentsWithSameMarks;
       studentsWithSameMarks = 1;
     }
-    
-    previousMarks = submission.obtainedMarks;
-    
-    // Step 4: Calculate grade based on percentage
-    const percentage = submission.percentage;
+    previousMarks = parseFloat(sub.obtained_marks);
+
+    const percentage = parseFloat(sub.percentage);
     let grade;
     if (percentage >= 90) grade = 'A+';
     else if (percentage >= 80) grade = 'A';
@@ -58,34 +49,27 @@ async function generateExamResults(examId) {
     else if (percentage >= 50) grade = 'C';
     else if (percentage >= 40) grade = 'D';
     else grade = 'F';
-    
-    // Step 5: Determine pass/fail
-    const isPassed = percentage >= (exam.passingScore || 40);
-    
-    // Step 6: Create or update Result document
-    const resultData = {
-      exam: examId,
-      student: submission.student,
-      submission: submission._id,
-      totalMarks: submission.totalMarks,
-      obtainedMarks: submission.obtainedMarks,
-      percentage: submission.percentage,
-      grade,
-      isPassed,
-      rank: currentRank,
-      isPublished: false,
-      generatedBy: submission.gradedBy
-    };
-    
-    const result = await Result.findOneAndUpdate(
-      { exam: examId, student: submission.student },
-      resultData,
-      { upsert: true, new: true }
-    );
-    
-    results.push(result);
+
+    const isPassed = percentage >= parseFloat(exam.passing_score || 40);
+
+    const resultId = `${examId}_${sub.student_id}`; // Composite-like ID for simplicity or use sub.id
+
+    // Upsert into results table
+    await query(`
+      INSERT INTO results (id, exam_id, student_id, submission_id, total_marks, obtained_marks, percentage, grade, is_passed, rank, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+      ON CONFLICT (id) DO UPDATE SET
+        obtained_marks = EXCLUDED.obtained_marks,
+        percentage = EXCLUDED.percentage,
+        grade = EXCLUDED.grade,
+        is_passed = EXCLUDED.is_passed,
+        rank = EXCLUDED.rank,
+        updated_at = NOW()
+    `, [resultId, examId, sub.student_id, sub.id, sub.total_marks, sub.obtained_marks, sub.percentage, grade, isPassed, currentRank]);
+
+    results.push({ student_id: sub.student_id, rank: currentRank, grade });
   }
-  
+
   return results;
 }
 

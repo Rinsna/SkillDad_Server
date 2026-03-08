@@ -93,11 +93,10 @@ resultSchema.methods.calculateGrade = function () {
 };
 
 // Pre-save hook to auto-calculate grade if not set
-resultSchema.pre('save', function (next) {
+resultSchema.pre('save', async function () {
   if (!this.grade && this.percentage !== undefined) {
     this.grade = this.calculateGrade();
   }
-  next();
 });
 
 // Compound index for unique student-exam combination

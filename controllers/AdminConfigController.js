@@ -1,6 +1,4 @@
-const Transaction = require('../models/payment/Transaction');
-const Course = require('../models/courseModel');
-const User = require('../models/userModel');
+const { query } = require('../config/postgres');
 
 /**
  * AdminConfigController - Handles admin configuration and transaction management
@@ -85,34 +83,61 @@ class AdminConfigController {
     try {
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 20;
-      const skip = (page - 1) * limit;
+      const offset = (page - 1) * limit;
 
       // Build filter
-      const filter = {};
+      let whereClause = '1=1';
+      const params = [];
+      let paramCount = 0;
+
       if (req.query.status) {
-        filter.status = req.query.status;
-      }
-      if (req.query.startDate || req.query.endDate) {
-        filter.initiatedAt = {};
-        if (req.query.startDate) {
-          filter.initiatedAt.$gte = new Date(req.query.startDate);
-        }
-        if (req.query.endDate) {
-          filter.initiatedAt.$lte = new Date(req.query.endDate);
-        }
+        paramCount++;
+        whereClause += ` AND t.status = $${paramCount}`;
+        params.push(req.query.status);
       }
 
-      // Fetch transactions with pagination
-      const [transactions, total] = await Promise.all([
-        Transaction.find(filter)
-          .populate('student', 'name email')
-          .populate('course', 'title price')
-          .sort({ initiatedAt: -1 })
-          .skip(skip)
-          .limit(limit)
-          .lean(),
-        Transaction.countDocuments(filter),
-      ]);
+      if (req.query.startDate) {
+        paramCount++;
+        whereClause += ` AND t.initiated_at >= $${paramCount}`;
+        params.push(new Date(req.query.startDate));
+      }
+
+      if (req.query.endDate) {
+        paramCount++;
+        whereClause += ` AND t.initiated_at <= $${paramCount}`;
+        params.push(new Date(req.query.endDate));
+      }
+
+      // Fetch transactions with pagination and joins
+      const transactionsRes = await query(`
+        SELECT t.*, 
+               s.name as student_name, s.email as student_email,
+               c.title as course_title, c.price as course_price
+        FROM transactions t
+        LEFT JOIN users s ON t.student_id = s.id
+        LEFT JOIN courses c ON t.course_id = c.id
+        WHERE ${whereClause}
+        ORDER BY t.initiated_at DESC
+        LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}
+      `, [...params, limit, offset]);
+
+      const countRes = await query(`
+        SELECT COUNT(*) as count FROM transactions t WHERE ${whereClause}
+      `, params);
+
+      const total = parseInt(countRes.rows[0].count);
+
+      // Map to keep the response structure consistent with what frontend expects
+      const transactions = transactionsRes.rows.map(t => ({
+        ...t,
+        transactionId: t.transaction_id,
+        student: { id: t.student_id, name: t.student_name, email: t.student_email },
+        course: { id: t.course_id, title: t.course_title, price: t.course_price },
+        initiatedAt: t.initiated_at,
+        completedAt: t.completed_at,
+        finalAmount: t.final_amount,
+        paymentMethod: t.payment_method
+      }));
 
       res.json({
         success: true,

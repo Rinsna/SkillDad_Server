@@ -1,110 +1,77 @@
-/**
- * Auto-Grading Service for MCQ Questions
- * 
- * Automatically grades MCQ questions in exam submissions.
- * Handles negative marking, score calculation, and status updates.
- * 
- * Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8
- */
-
-const ExamSubmissionNew = require('../models/examSubmissionNewModel');
-const Exam = require('../models/examModel');
+const { query } = require('../config/postgres');
 
 /**
- * Auto-grades MCQ questions in a submission
+ * Auto-grades MCQ questions in a submission using PostgreSQL
  * 
- * @preconditions:
- * - submission exists and has status 'submitted'
- * - submission has answers array with MCQ answers
- * - questions exist with correct options marked
- * 
- * @postconditions:
- * - Each MCQ answer has marksAwarded and isCorrect set
- * - submission.obtainedMarks calculated correctly
- * - submission.percentage calculated
- * - If all MCQ, status set to 'graded'
- * 
- * @param {ObjectId} submissionId - The submission to grade
- * @returns {Object} Grading summary with marks breakdown
+ * @param {string} submissionId - The submission to grade
+ * @returns {Object} Grading summary
  */
 async function autoGradeMCQSubmission(submissionId) {
-  // Step 1: Fetch submission with populated questions
-  const submission = await ExamSubmissionNew.findById(submissionId)
-    .populate('answers.question');
-  
+  // 1. Fetch submission and questions in one go if possible, or separately
+  const subRes = await query('SELECT * FROM exam_submissions_new WHERE id = $1', [submissionId]);
+  const submission = subRes.rows[0];
+
   if (!submission) {
     throw new Error('Submission not found');
   }
-  
-  if (submission.status !== 'submitted') {
-    throw new Error('Can only grade submitted submissions');
-  }
-  
-  // Step 2: Fetch exam to get totalMarks
-  const exam = await Exam.findById(submission.exam);
+
+  const examRes = await query('SELECT * FROM exams WHERE id = $1', [submission.exam_id]);
+  const exam = examRes.rows[0];
   if (!exam) {
     throw new Error('Exam not found');
   }
-  
-  submission.totalMarks = exam.totalMarks;
-  
+
+  const qRes = await query('SELECT * FROM questions WHERE exam_id = $1', [submission.exam_id]);
+  const questions = qRes.rows;
+
   let obtainedMarks = 0;
   let mcqCount = 0;
   let correctCount = 0;
-  
-  // Step 3: Iterate through answers and grade MCQ questions
-  // Loop invariant: obtainedMarks is sum of marks for all processed answers
-  for (let i = 0; i < submission.answers.length; i++) {
-    const answer = submission.answers[i];
-    const question = answer.question;
-    
-    if (answer.questionType === 'mcq' && question) {
+  let answers = submission.answers || [];
+
+  // Grade each answer
+  for (let answer of answers) {
+    const question = questions.find(q => q.id === (answer.questionId || answer.question));
+    if (question && question.question_type === 'mcq') {
       mcqCount++;
-      
-      // Find correct option index
-      const correctOptionIndex = question.options.findIndex(opt => opt.isCorrect);
-      
-      // Check if student's answer is correct
+      const options = question.options; // This is a JSONB array
+      const correctOptionIndex = options.findIndex(opt => opt.isCorrect);
+
       if (answer.selectedOption === correctOptionIndex) {
         answer.isCorrect = true;
-        answer.marksAwarded = question.marks;
-        obtainedMarks += question.marks;
+        answer.marksAwarded = parseFloat(question.marks);
+        obtainedMarks += parseFloat(question.marks);
         correctCount++;
       } else {
         answer.isCorrect = false;
-        answer.marksAwarded = -question.negativeMarks;
-        obtainedMarks -= question.negativeMarks;
+        answer.marksAwarded = -parseFloat(question.negative_marks || 0);
+        obtainedMarks -= parseFloat(question.negative_marks || 0);
       }
     }
-    // Maintain invariant: obtainedMarks updated for each processed answer
   }
-  
-  // Step 4: Ensure obtainedMarks is non-negative
+
   obtainedMarks = Math.max(0, obtainedMarks);
-  
-  // Step 5: Update submission with calculated marks
-  submission.obtainedMarks = obtainedMarks;
-  submission.percentage = (obtainedMarks / submission.totalMarks) * 100;
-  
-  // Step 6: If all questions are MCQ, set status to 'graded'
-  if (mcqCount === submission.answers.length) {
-    submission.status = 'graded';
-    submission.gradedAt = new Date();
-  }
-  
-  await submission.save();
-  
-  // Step 7: Return grading summary
+  const totalMarks = parseFloat(exam.total_points || 100);
+  const percentage = (obtainedMarks / totalMarks) * 100;
+
+  // Update PG
+  await query(`
+    UPDATE exam_submissions_new 
+    SET obtained_marks = $1, 
+        percentage = $2, 
+        status = CASE WHEN $3 = $4 THEN 'graded' ELSE status END,
+        graded_at = CASE WHEN $3 = $4 THEN NOW() ELSE graded_at END,
+        answers = $5,
+        total_marks = $6
+    WHERE id = $7
+  `, [obtainedMarks, percentage, mcqCount, answers.length, JSON.stringify(answers), totalMarks, submissionId]);
+
   return {
-    submissionId: submission._id,
-    totalQuestions: submission.answers.length,
+    submissionId,
     mcqCount,
     correctCount,
-    incorrectCount: mcqCount - correctCount,
     obtainedMarks,
-    totalMarks: submission.totalMarks,
-    percentage: submission.percentage,
-    status: submission.status
+    percentage
   };
 }
 

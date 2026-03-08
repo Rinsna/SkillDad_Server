@@ -130,7 +130,7 @@ router.post(
   protect,
   authorize('student', 'admin'),
   paymentInitiateLimiter,
-  // paymentCsrfProtection,
+  paymentCsrfProtection,
   initiatePaymentValidation,
   handleValidationErrors,
   initiatePayment
@@ -232,10 +232,12 @@ router.get(
   handleValidationErrors,
   async (req, res) => {
     try {
-      const Transaction = require('../models/payment/Transaction');
-      const transaction = await Transaction.findOne({
-        transactionId: req.params.transactionId,
-      });
+      const { query } = require('../config/postgres');
+      const resSet = await query(
+        'SELECT * FROM transactions WHERE transaction_id = $1',
+        [req.params.transactionId]
+      );
+      const transaction = resSet.rows[0];
 
       if (!transaction) {
         return res.status(404).json({
@@ -248,7 +250,7 @@ router.get(
       if (
         req.user.role !== 'admin' &&
         req.user.role !== 'finance' &&
-        transaction.student.toString() !== req.user._id.toString()
+        transaction.student_id !== req.user.id
       ) {
         return res.status(403).json({
           success: false,
@@ -256,7 +258,7 @@ router.get(
         });
       }
 
-      if (!transaction.receiptUrl) {
+      if (!transaction.receipt_url) {
         return res.status(404).json({
           success: false,
           message: 'Receipt not available for this transaction',
@@ -266,8 +268,8 @@ router.get(
       // Redirect to receipt URL or serve the file
       res.json({
         success: true,
-        receiptUrl: transaction.receiptUrl,
-        receiptNumber: transaction.receiptNumber,
+        receiptUrl: transaction.receipt_url,
+        receiptNumber: transaction.receipt_number,
       });
     } catch (error) {
       console.error('Receipt retrieval error:', error);

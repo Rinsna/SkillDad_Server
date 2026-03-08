@@ -319,6 +319,25 @@ const templates = {
             text: 'View My Submissions',
             url: getClientUrl('/dashboard/exams')
         });
+    },
+
+    adminEnrollment: (name, courseTitle, enrolledBy) => {
+        const content = `
+            <p style="${baseStyle.p}">Hello <strong>${name}</strong>,</p>
+            <p style="${baseStyle.p}">Great news! You have been enrolled in <strong>${courseTitle}</strong> by ${enrolledBy}.</p>
+            <div style="${baseStyle.highlight}">
+                <p style="margin: 0 0 4px 0;"><strong style="color: #7C3AED;">Course:</strong> ${courseTitle}</p>
+                <p style="margin: 0;"><strong style="color: #7C3AED;">Enrollment Type:</strong> Free Enrollment</p>
+            </div>
+            <div style="background-color: #ECFDF5; border-left: 4px solid #10B981; padding: 16px; margin: 24px 0; border-radius: 8px;">
+                <p style="margin: 0; font-size: 14px; color: #065F46;"><strong>✅ Full Access Granted:</strong><br/>You now have complete access to all course materials, live sessions, and exams.</p>
+            </div>
+            <p style="${baseStyle.p}">Start your learning journey today and make the most of this opportunity!</p>
+        `;
+        return layout('Course Enrollment Confirmed', content, {
+            text: 'Access My Course',
+            url: getClientUrl('/dashboard/courses')
+        });
     }
 };
 

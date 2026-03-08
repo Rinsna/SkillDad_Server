@@ -1,7 +1,7 @@
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
-const Transaction = require('../../models/payment/Transaction');
+const { query } = require('../../config/postgres');
 const sendEmail = require('../../utils/sendEmail');
 
 /**
@@ -64,10 +64,22 @@ class ReceiptGeneratorService {
    */
   async generateReceipt(transactionId) {
     try {
-      // Fetch transaction with populated references
-      const transaction = await Transaction.findOne({ transactionId })
-        .populate('student', 'name email phone')
-        .populate('course', 'title price');
+      // Fetch transaction with joined references from PostgreSQL
+      const res = await query(`
+        SELECT 
+          t.*, 
+          u.name as student_name, 
+          u.email as student_email, 
+          u.phone as student_phone,
+          c.title as course_title,
+          c.price as course_price
+        FROM transactions t
+        LEFT JOIN users u ON t.student_id = u.id
+        LEFT JOIN courses c ON t.course_id = c.id
+        WHERE t.transaction_id = $1
+      `, [transactionId]);
+
+      const transaction = res.rows[0];
 
       if (!transaction) {
         throw new Error('Transaction not found');
@@ -78,25 +90,34 @@ class ReceiptGeneratorService {
       }
 
       // Generate receipt number if not exists
-      if (!transaction.receiptNumber) {
-        transaction.receiptNumber = this.generateReceiptNumber();
-        await transaction.save();
+      if (!transaction.receipt_number) {
+        transaction.receipt_number = this.generateReceiptNumber();
+        await query(`
+          UPDATE transactions 
+          SET receipt_number = $1, 
+              updated_at = NOW() 
+          WHERE id = $2
+        `, [transaction.receipt_number, transaction.id]);
       }
 
       // Generate PDF
-      const filename = `${transaction.receiptNumber}.pdf`;
+      const filename = `${transaction.receipt_number}.pdf`;
       const filepath = path.join(this.receiptsDir, filename);
       const receiptUrl = `/uploads/receipts/${filename}`;
 
       await this.createPDF(transaction, filepath);
 
       // Update transaction with receipt URL
-      transaction.receiptUrl = receiptUrl;
-      transaction.receiptGeneratedAt = new Date();
-      await transaction.save();
+      await query(`
+        UPDATE transactions 
+        SET receipt_url = $1, 
+            receipt_generated_at = $2,
+            updated_at = NOW() 
+        WHERE id = $3
+      `, [receiptUrl, new Date(), transaction.id]);
 
       return {
-        receiptNumber: transaction.receiptNumber,
+        receiptNumber: transaction.receipt_number,
         receiptUrl,
         filepath
       };
@@ -190,7 +211,7 @@ class ReceiptGeneratorService {
       .text('PAYMENT RECEIPT', 50, 180, { align: 'center' })
       .fontSize(12)
       .fillColor('#7C3AED')
-      .text(`Receipt No: ${transaction.receiptNumber}`, 50, 210, { align: 'center' });
+      .text(`Receipt No: ${transaction.receipt_number || transaction.receiptNumber}`, 50, 210, { align: 'center' });
   }
 
   /**
@@ -210,18 +231,18 @@ class ReceiptGeneratorService {
       .fillColor('#666666')
       .text('Transaction ID:', 50, yStart + 25)
       .fillColor('#111827')
-      .text(transaction.transactionId, 200, yStart + 25)
-      
+      .text(transaction.transaction_id || transaction.transactionId, 200, yStart + 25)
+
       .fillColor('#666666')
       .text('Gateway Transaction ID:', 50, yStart + 45)
       .fillColor('#111827')
-      .text(transaction.gatewayTransactionId || 'N/A', 200, yStart + 45)
-      
+      .text(transaction.gateway_transaction_id || transaction.gatewayTransactionId || 'N/A', 200, yStart + 45)
+
       .fillColor('#666666')
       .text('Transaction Date:', 50, yStart + 65)
       .fillColor('#111827')
-      .text(new Date(transaction.completedAt || transaction.createdAt).toLocaleString('en-IN'), 200, yStart + 65)
-      
+      .text(new Date(transaction.completed_at || transaction.completedAt || transaction.initiated_at || transaction.createdAt).toLocaleString('en-IN'), 200, yStart + 65)
+
       .fillColor('#666666')
       .text('Status:', 50, yStart + 85)
       .fillColor('#10B981')
@@ -245,17 +266,17 @@ class ReceiptGeneratorService {
       .fillColor('#666666')
       .text('Name:', 50, yStart + 25)
       .fillColor('#111827')
-      .text(transaction.student?.name || 'N/A', 200, yStart + 25)
-      
+      .text(transaction.student_name || transaction.student?.name || 'N/A', 200, yStart + 25)
+
       .fillColor('#666666')
       .text('Email:', 50, yStart + 45)
       .fillColor('#111827')
-      .text(transaction.student?.email || 'N/A', 200, yStart + 45)
-      
+      .text(transaction.student_email || transaction.student?.email || 'N/A', 200, yStart + 45)
+
       .fillColor('#666666')
       .text('Phone:', 50, yStart + 65)
       .fillColor('#111827')
-      .text(transaction.student?.phone || 'N/A', 200, yStart + 65);
+      .text(transaction.student_phone || transaction.student?.phone || 'N/A', 200, yStart + 65);
   }
 
   /**
@@ -275,7 +296,7 @@ class ReceiptGeneratorService {
       .fillColor('#666666')
       .text('Course Name:', 50, yStart + 25)
       .fillColor('#111827')
-      .text(transaction.course?.title || 'N/A', 200, yStart + 25, { width: 345 });
+      .text(transaction.course_title || transaction.course?.title || 'N/A', 200, yStart + 25, { width: 345 });
   }
 
   /**
@@ -290,15 +311,17 @@ class ReceiptGeneratorService {
       .fillColor('#111827')
       .text('Payment Method', 50, yStart);
 
-    let paymentMethodText = transaction.paymentMethod?.replace(/_/g, ' ').toUpperCase() || 'N/A';
-    
+    const method = transaction.payment_method || transaction.paymentMethod;
+    const details = transaction.payment_method_details || transaction.paymentMethodDetails;
+    let paymentMethodText = method?.replace(/_/g, ' ').toUpperCase() || 'N/A';
+
     // Add card details if available
-    if (transaction.paymentMethodDetails?.cardLast4) {
-      paymentMethodText += ` - ${transaction.paymentMethodDetails.cardType || 'Card'} ending in ${transaction.paymentMethodDetails.cardLast4}`;
-    } else if (transaction.paymentMethodDetails?.bankName) {
-      paymentMethodText += ` - ${transaction.paymentMethodDetails.bankName}`;
-    } else if (transaction.paymentMethodDetails?.walletProvider) {
-      paymentMethodText += ` - ${transaction.paymentMethodDetails.walletProvider}`;
+    if (details?.cardLast4) {
+      paymentMethodText += ` - ${details.cardType || 'Card'} ending in ${details.cardLast4}`;
+    } else if (details?.bankName) {
+      paymentMethodText += ` - ${details.bankName}`;
+    } else if (details?.walletProvider) {
+      paymentMethodText += ` - ${details.walletProvider}`;
     }
 
     doc
@@ -324,47 +347,53 @@ class ReceiptGeneratorService {
     const col1 = 50;
     const col2 = 400;
 
+    const originalAmount = transaction.original_amount || transaction.originalAmount;
+    const discountAmount = transaction.discount_amount || transaction.discountAmount;
+    const finalAmount = transaction.final_amount || transaction.finalAmount;
+    const gstAmount = transaction.gst_amount || transaction.gstAmount;
+    const discountCode = transaction.discount_code || transaction.discountCode;
+
     // Original amount
     doc
       .fontSize(10)
       .fillColor('#666666')
       .text('Original Amount:', col1, tableTop)
       .fillColor('#111827')
-      .text(this.formatAmount(transaction.originalAmount), col2, tableTop, { align: 'right', width: 145 });
+      .text(this.formatAmount(originalAmount), col2, tableTop, { align: 'right', width: 145 });
 
     // Discount
-    if (transaction.discountAmount && parseFloat(transaction.discountAmount.toString()) > 0) {
+    if (discountAmount && parseFloat(discountAmount.toString()) > 0) {
       doc
         .fillColor('#666666')
         .text('Discount:', col1, tableTop + 20)
         .fillColor('#10B981')
-        .text(`- ${this.formatAmount(transaction.discountAmount)}`, col2, tableTop + 20, { align: 'right', width: 145 });
+        .text(`- ${this.formatAmount(discountAmount)}`, col2, tableTop + 20, { align: 'right', width: 145 });
 
-      if (transaction.discountCode) {
+      if (discountCode) {
         doc
           .fontSize(8)
           .fillColor('#7C3AED')
-          .text(`(Code: ${transaction.discountCode})`, col1 + 80, tableTop + 20);
+          .text(`(Code: ${discountCode})`, col1 + 80, tableTop + 20);
       }
     }
 
     // Subtotal
-    const subtotalY = transaction.discountAmount && parseFloat(transaction.discountAmount.toString()) > 0 ? tableTop + 40 : tableTop + 20;
+    const subtotalY = discountAmount && parseFloat(discountAmount.toString()) > 0 ? tableTop + 40 : tableTop + 20;
     doc
       .fontSize(10)
       .fillColor('#666666')
       .text('Subtotal:', col1, subtotalY)
       .fillColor('#111827')
-      .text(this.formatAmount(transaction.finalAmount), col2, subtotalY, { align: 'right', width: 145 });
+      .text(this.formatAmount(finalAmount), col2, subtotalY, { align: 'right', width: 145 });
 
     // GST
     let gstY = subtotalY + 20;
-    if (transaction.gstAmount && parseFloat(transaction.gstAmount.toString()) > 0) {
+    if (gstAmount && parseFloat(gstAmount.toString()) > 0) {
       doc
         .fillColor('#666666')
         .text('GST (18%):', col1, gstY)
         .fillColor('#111827')
-        .text(this.formatAmount(transaction.gstAmount), col2, gstY, { align: 'right', width: 145 });
+        .text(this.formatAmount(gstAmount), col2, gstY, { align: 'right', width: 145 });
       gstY += 20;
     }
 
@@ -377,9 +406,9 @@ class ReceiptGeneratorService {
       .stroke();
 
     // Total amount
-    const totalAmount = transaction.gstAmount && parseFloat(transaction.gstAmount.toString()) > 0
-      ? parseFloat(transaction.finalAmount.toString()) + parseFloat(transaction.gstAmount.toString())
-      : parseFloat(transaction.finalAmount.toString());
+    const totalAmount = gstAmount && parseFloat(gstAmount.toString()) > 0
+      ? parseFloat(finalAmount.toString()) + parseFloat(gstAmount.toString())
+      : parseFloat(finalAmount.toString());
 
     doc
       .fontSize(12)
@@ -419,12 +448,21 @@ class ReceiptGeneratorService {
       // Generate receipt if not already generated
       const receiptData = await this.generateReceipt(transactionId);
 
-      // Fetch transaction for email details
-      const transaction = await Transaction.findOne({ transactionId })
-        .populate('student', 'name email')
-        .populate('course', 'title');
+      // Fetch transaction for email details from PostgreSQL
+      const res = await query(`
+        SELECT 
+          t.*, 
+          u.name as student_name, 
+          u.email as student_email,
+          c.title as course_title
+        FROM transactions t
+        LEFT JOIN users u ON t.student_id = u.id
+        LEFT JOIN courses c ON t.course_id = c.id
+        WHERE t.transaction_id = $1
+      `, [transactionId]);
 
-      const recipientEmail = studentEmail || transaction.student?.email;
+      const transaction = res.rows[0];
+      const recipientEmail = studentEmail || transaction.student_email;
 
       if (!recipientEmail) {
         throw new Error('Student email not found');
@@ -433,11 +471,11 @@ class ReceiptGeneratorService {
       // Send email with receipt attachment
       const emailResult = await sendEmail({
         email: recipientEmail,
-        subject: `Payment Receipt - ${transaction.receiptNumber}`,
+        subject: `Payment Receipt - ${transaction.receipt_number}`,
         html: this.generateReceiptEmailHTML(transaction, receiptData),
         attachments: [
           {
-            filename: `${transaction.receiptNumber}.pdf`,
+            filename: `${transaction.receipt_number}.pdf`,
             path: receiptData.filepath
           }
         ]
@@ -445,7 +483,7 @@ class ReceiptGeneratorService {
 
       return {
         success: true,
-        receiptNumber: transaction.receiptNumber,
+        receiptNumber: transaction.receipt_number,
         sentTo: recipientEmail,
         emailResult
       };
@@ -459,9 +497,16 @@ class ReceiptGeneratorService {
    * Generate HTML email content for receipt
    */
   generateReceiptEmailHTML(transaction, receiptData) {
-    const totalAmount = transaction.gstAmount && parseFloat(transaction.gstAmount.toString()) > 0
-      ? parseFloat(transaction.finalAmount.toString()) + parseFloat(transaction.gstAmount.toString())
-      : parseFloat(transaction.finalAmount.toString());
+    const finalAmount = transaction.final_amount || transaction.finalAmount;
+    const gstAmount = transaction.gst_amount || transaction.gstAmount;
+    const studentName = transaction.student_name || transaction.student?.name;
+    const receiptNumber = transaction.receipt_number || transaction.receiptNumber;
+    const transactionId = transaction.transaction_id || transaction.transactionId;
+    const courseTitle = transaction.course_title || transaction.course?.title;
+
+    const totalAmount = gstAmount && parseFloat(gstAmount.toString()) > 0
+      ? parseFloat(finalAmount.toString()) + parseFloat(gstAmount.toString())
+      : parseFloat(finalAmount.toString());
 
     return `
       <div style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 40px 20px; color: #1F2937; background-color: #F9FAFB; line-height: 1.6;">
@@ -473,15 +518,15 @@ class ReceiptGeneratorService {
           <div style="padding: 40px;">
             <h2 style="margin: 0 0 16px 0; font-size: 20px; font-weight: 700; color: #111827;">Payment Successful!</h2>
             <p style="margin: 0 0 16px 0; font-size: 16px; color: #4B5563;">
-              Hello <strong>${transaction.student?.name}</strong>,
+              Hello <strong>${studentName}</strong>,
             </p>
             <p style="margin: 0 0 16px 0; font-size: 16px; color: #4B5563;">
               Thank you for your payment. Your transaction has been processed successfully.
             </p>
             <div style="background-color: #F5F3FF; border: 1px solid #DDD6FE; padding: 24px; border-radius: 12px; margin: 24px 0;">
-              <p style="margin: 0 0 8px 0;"><strong style="color: #7C3AED;">Receipt Number:</strong> ${transaction.receiptNumber}</p>
-              <p style="margin: 0 0 8px 0;"><strong style="color: #7C3AED;">Transaction ID:</strong> ${transaction.transactionId}</p>
-              <p style="margin: 0 0 8px 0;"><strong style="color: #7C3AED;">Course:</strong> ${transaction.course?.title}</p>
+              <p style="margin: 0 0 8px 0;"><strong style="color: #7C3AED;">Receipt Number:</strong> ${receiptNumber}</p>
+              <p style="margin: 0 0 8px 0;"><strong style="color: #7C3AED;">Transaction ID:</strong> ${transactionId}</p>
+              <p style="margin: 0 0 8px 0;"><strong style="color: #7C3AED;">Course:</strong> ${courseTitle}</p>
               <p style="margin: 0;"><strong style="color: #7C3AED;">Amount Paid:</strong> ${this.formatAmount(totalAmount)}</p>
             </div>
             <p style="margin: 0 0 16px 0; font-size: 16px; color: #4B5563;">

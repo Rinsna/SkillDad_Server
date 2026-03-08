@@ -128,6 +128,17 @@ class WhatsAppService {
             [studentName, courseTitle]
         );
     }
+
+    /**
+     * Notify about admin enrollment in a course
+     */
+    async notifyAdminEnrollment(studentName, phone, courseTitle, enrolledBy) {
+        return this.sendTemplateMessage(
+            phone,
+            process.env.GUPSHUP_TEMPLATE_ENROLLMENT || 'admin_enrollment',
+            [studentName, courseTitle, enrolledBy]
+        );
+    }
 }
 
 module.exports = new WhatsAppService();
