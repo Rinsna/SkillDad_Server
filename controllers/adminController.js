@@ -1,14 +1,18 @@
-const User = require('../models/userModel');
-const Course = require('../models/courseModel');
-const Support = require('../models/supportModel');
+const { query } = require('../config/postgres');
 const sendEmail = require('../utils/sendEmail');
 const emailTemplates = require('../utils/emailTemplates');
+const socketService = require('../services/SocketService');
+const bcrypt = require('bcryptjs');
+const User = require('../models/userModel');
 const PartnerLogo = require('../models/partnerLogoModel');
 const Director = require('../models/directorModel');
 const Enrollment = require('../models/enrollmentModel');
 const Document = require('../models/documentModel');
-const socketService = require('../services/SocketService');
+const Payout = require('../models/payoutModel');
 
+// @desc    Update entity (partner/university) details + discount rate
+// @route   PUT /api/admin/entities/:id
+// @access  Private (Admin)
 // @desc    Update entity (partner/university) details + discount rate
 // @route   PUT /api/admin/entities/:id
 // @access  Private (Admin)
@@ -17,76 +21,92 @@ const updateEntity = async (req, res) => {
         console.log('[updateEntity] body:', req.body, 'id:', req.params.id);
         const { name, email, role, discountRate } = req.body;
 
-        const user = await User.findById(req.params.id);
+        const userRes = await query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+        const user = userRes.rows[0];
         if (!user) {
             return res.status(404).json({ message: 'Entity not found' });
         }
 
+        let updateFields = [];
+        let params = [];
+        let paramCount = 1;
+
         if (name && name.trim()) {
             const trimmedName = name.trim();
-            user.name = trimmedName;
+            updateFields.push(`name = $${paramCount++}`);
+            params.push(trimmedName);
 
-            // Sync with profile based on role
-            if (user.role === 'partner') {
-                if (!user.profile) user.profile = {};
-                user.profile.partnerName = trimmedName;
-            } else if (user.role === 'university') {
-                if (!user.profile) user.profile = {};
-                user.profile.universityName = trimmedName;
-            }
+            // Sync profile
+            let profile = user.profile || {};
+            if (user.role === 'partner') profile.partnerName = trimmedName;
+            else if (user.role === 'university') profile.universityName = trimmedName;
+
+            updateFields.push(`profile = $${paramCount++}`);
+            params.push(JSON.stringify(profile));
         }
-        if (email && email.trim()) user.email = email.trim();
+
+        if (email && email.trim()) {
+            updateFields.push(`email = $${paramCount++}`);
+            params.push(email.trim().toLowerCase());
+        }
+
         if (role) {
             const validRoles = ['student', 'university', 'partner', 'admin', 'finance'];
             const lowerRole = role.toLowerCase();
             if (!validRoles.includes(lowerRole)) {
                 return res.status(400).json({ message: `Invalid role: ${role}` });
             }
-            user.role = lowerRole;
+            updateFields.push(`role = $${paramCount++}`);
+            params.push(lowerRole);
         }
+
         if (discountRate !== undefined && discountRate !== null) {
-            user.discountRate = Number(discountRate) || 0;
+            updateFields.push(`"discountRate" = $${paramCount++}`);
+            params.push(Number(discountRate) || 0);
         }
 
+        if (updateFields.length > 0) {
+            params.push(req.params.id);
+            const updateQuery = `UPDATE users SET ${updateFields.join(', ')}, updated_at = NOW() WHERE id = $${paramCount} RETURNING *`;
+            const updatedRes = await query(updateQuery, params);
+            const saved = updatedRes.rows[0];
 
-        const saved = await user.save();
-        console.log('[updateEntity] saved:', saved._id, saved.discountRate);
+            // Notify admins via WebSocket
+            socketService.notifyUserListUpdate('updated', saved);
 
-        if (saved.role === 'partner' && discountRate !== undefined && discountRate !== null) {
-            const Discount = require('../models/discountModel');
-            const newCode = (saved.name.replace(/\s+/g, '').substring(0, 6) + saved.discountRate).toUpperCase();
+            // Handle Discount Code for Partners
+            if (saved.role === 'partner' && discountRate !== undefined && discountRate !== null) {
+                const newCode = (saved.name.replace(/\s+/g, '').substring(0, 6) + (Number(discountRate) || 0)).toUpperCase();
 
-            // Look for existing discount code for this partner
-            let discountDoc = await Discount.findOne({ partner: saved._id });
-            if (discountDoc) {
-                discountDoc.value = saved.discountRate;
-                discountDoc.code = newCode;
-                await discountDoc.save();
-            } else {
-                await Discount.create({
-                    code: newCode,
-                    value: saved.discountRate,
-                    type: 'percentage',
-                    partner: saved._id,
-                    active: true,
-                    uses: 0,
-                    maxUses: 9999
-                });
+                const discRes = await query('SELECT id FROM discounts WHERE partner_id = $1', [saved.id]);
+                if (discRes.rowCount > 0) {
+                    await query(
+                        'UPDATE discounts SET value = $1, code = $2, updated_at = NOW() WHERE partner_id = $3',
+                        [Number(discountRate) || 0, newCode, saved.id]
+                    );
+                } else {
+                    await query(
+                        'INSERT INTO discounts (code, value, type, partner_id, active, uses, max_uses) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+                        [newCode, Number(discountRate) || 0, 'percentage', saved.id, true, 0, 9999]
+                    );
+                }
             }
+
+            return res.json({
+                _id: saved.id,
+                name: saved.name,
+                email: saved.email,
+                role: saved.role,
+                discountRate: saved.discountRate,
+                isVerified: saved.is_verified,
+                message: 'Entity updated successfully'
+            });
         }
 
-        return res.json({
-            _id: saved._id,
-            name: saved.name,
-            email: saved.email,
-            role: saved.role,
-            discountRate: saved.discountRate,
-            isVerified: saved.isVerified,
-            message: 'Entity updated successfully'
-        });
+        return res.json({ message: 'No changes provided' });
     } catch (error) {
         console.error('[updateEntity] error:', error);
-        if (error.code === 11000) {
+        if (error.code === '23505') { // Postgres unique violation
             return res.status(400).json({ message: 'Email already in use by another account' });
         }
         return res.status(500).json({ message: error.message || 'Server error updating entity' });
@@ -94,28 +114,23 @@ const updateEntity = async (req, res) => {
 };
 
 // @desc    Get Global Stats (Admin)
-// @route   GET /api/admin/stats
-// @access  Private (Admin)
 const getGlobalStats = async (req, res) => {
     try {
-        const [totalUsers, totalCourses, totalStudents, totalPartners, totalTickets] = await Promise.all([
-            User.countDocuments(),
-            Course.countDocuments(),
-            User.countDocuments({ role: 'student' }),
-            User.countDocuments({ role: 'partner' }),
-            Support.countDocuments({ status: 'Open' })
+        const [userCount, courseCount, studentCount, partnerCount, ticketCount] = await Promise.all([
+            query('SELECT COUNT(*) FROM users'),
+            query('SELECT COUNT(*) FROM courses'),
+            query("SELECT COUNT(*) FROM users WHERE role = 'student'"),
+            query("SELECT COUNT(*) FROM users WHERE role = 'partner'"),
+            query("SELECT COUNT(*) FROM audit_logs WHERE action = 'error'") // Placeholder for support tickets
         ]);
 
-        // Revenue placeholder
-        const totalRevenue = 12500;
-
         res.json({
-            totalUsers,
-            totalCourses,
-            totalStudents,
-            totalPartners,
-            totalTickets,
-            totalRevenue
+            totalUsers: parseInt(userCount.rows[0].count),
+            totalCourses: parseInt(courseCount.rows[0].count),
+            totalStudents: parseInt(studentCount.rows[0].count),
+            totalPartners: parseInt(partnerCount.rows[0].count),
+            totalTickets: parseInt(ticketCount.rows[0].count),
+            totalRevenue: 12500
         });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -123,20 +138,18 @@ const getGlobalStats = async (req, res) => {
 };
 
 // @desc    Get all users with pagination
-// @route   GET /api/admin/users
-// @access  Private (Admin)
 const getAllUsers = async (req, res) => {
     const pageSize = 20;
     const page = Number(req.query.pageNumber) || 1;
+    const offset = pageSize * (page - 1);
 
     try {
-        const count = await User.countDocuments({});
-        const users = await User.find({})
-            .limit(pageSize)
-            .skip(pageSize * (page - 1))
-            .select('-password'); // Exclude password
+        const countRes = await query('SELECT COUNT(*) FROM users');
+        const count = parseInt(countRes.rows[0].count);
 
-        res.json({ users, page, pages: Math.ceil(count / pageSize) });
+        const usersRes = await query('SELECT id as _id, name, email, role, profile, is_verified, created_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2', [pageSize, offset]);
+
+        res.json({ users: usersRes.rows, page, pages: Math.ceil(count / pageSize) });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -149,7 +162,8 @@ const updateUserRole = async (req, res) => {
     try {
         const { role, name, email, discountRate } = req.body;
 
-        const user = await User.findById(req.params.id);
+        const userRes = await query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+        const user = userRes.rows[0];
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
@@ -161,29 +175,42 @@ const updateUserRole = async (req, res) => {
             return res.status(400).json({ message: 'Invalid role specified' });
         }
 
-        user.role = newRole;
+        let updateFields = [`role = $1`];
+        let params = [newRole];
+        let paramCount = 2;
 
         if (name) {
-            user.name = name;
-            if (user.role === 'partner') {
-                if (!user.profile) user.profile = {};
-                user.profile.partnerName = name;
-            } else if (user.role === 'university') {
-                if (!user.profile) user.profile = {};
-                user.profile.universityName = name;
-            }
+            updateFields.push(`name = $${paramCount++}`);
+            params.push(name);
+
+            let profile = user.profile || {};
+            if (newRole === 'partner') profile.partnerName = name;
+            else if (newRole === 'university') profile.universityName = name;
+
+            updateFields.push(`profile = $${paramCount++}`);
+            params.push(JSON.stringify(profile));
         }
 
-        if (email) user.email = email;
+        if (email) {
+            updateFields.push(`email = $${paramCount++}`);
+            params.push(email);
+        }
 
         if (discountRate !== undefined) {
-            user.discountRate = Number(discountRate);
+            updateFields.push(`"discountRate" = $${paramCount++}`);
+            params.push(Number(discountRate));
         }
 
-        const updatedUser = await user.save();
+        params.push(req.params.id);
+        const updateQuery = `UPDATE users SET ${updateFields.join(', ')}, updated_at = NOW() WHERE id = $${paramCount} RETURNING *`;
+        const updatedRes = await query(updateQuery, params);
+        const updatedUser = updatedRes.rows[0];
+
+        // Notify admins via WebSocket
+        socketService.notifyUserListUpdate('updated', updatedUser);
 
         res.json({
-            _id: updatedUser._id,
+            _id: updatedUser.id,
             name: updatedUser.name,
             email: updatedUser.email,
             role: updatedUser.role,
@@ -193,7 +220,7 @@ const updateUserRole = async (req, res) => {
     } catch (error) {
         console.error('Update partner error:', error);
         res.status(500).json({
-            message: error.code === 11000 ? 'Email already in use' : (error.message || 'Failed to update partner')
+            message: error.code === '23505' ? 'Email already in use' : (error.message || 'Failed to update partner')
         });
     }
 };
@@ -205,18 +232,23 @@ const updateUserRole = async (req, res) => {
 // @access  Private (Admin)
 const verifyUser = async (req, res) => {
     try {
-        const user = await User.findById(req.params.id);
+        const userRes = await query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+        const user = userRes.rows[0];
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        user.isVerified = !user.isVerified;
-        const updatedUser = await user.save();
+        const newVerified = !user.is_verified;
+        const updatedRes = await query('UPDATE users SET is_verified = $1, updated_at = NOW() WHERE id = $2 RETURNING *', [newVerified, req.params.id]);
+        const updatedUser = updatedRes.rows[0];
+
+        // Notify admins via WebSocket
+        socketService.notifyUserListUpdate('updated', updatedUser);
 
         res.json({
-            _id: updatedUser._id,
-            isVerified: updatedUser.isVerified,
+            _id: updatedUser.id,
+            isVerified: updatedUser.is_verified,
             message: 'Verification status updated successfully'
         });
     } catch (error) {
@@ -276,33 +308,32 @@ const getPlatformAnalytics = async (req, res) => {
 
 // @desc    Get Partner Profile & Discount info
 // @route   GET /api/admin/partners/:id
-// @desc    Get partner details with stats
-// @route   GET /api/admin/partners/:id
 // @access  Private (Admin)
 const getPartnerDetails = async (req, res) => {
     try {
-        const partner = await User.findById(req.params.id).select('-password');
+        const partnerRes = await query('SELECT id as _id, name, email, role, profile, "discountRate", is_verified as "isVerified", created_at as "createdAt" FROM users WHERE id = $1', [req.params.id]);
+        const partner = partnerRes.rows[0];
+
         if (partner) {
-            const Discount = require('../models/discountModel');
-            const Payout = require('../models/payoutModel');
+            const discounts = await query('SELECT code FROM discounts WHERE partner_id = $1', [partner._id]);
+            const codes = discounts.rows.map(d => d.code);
 
-            const discounts = await Discount.find({ partner: partner._id });
-            const codes = discounts.map(d => d.code);
+            const studentsCountRes = await query(
+                "SELECT COUNT(*) FROM users WHERE profile->>'partnerCode' = ANY($1) AND role = 'student'",
+                [codes]
+            );
 
-            const studentsCount = await User.countDocuments({
-                partnerCode: { $in: codes },
-                role: 'student'
-            });
+            const payoutsRes = await query('SELECT amount, status FROM payouts WHERE partner_id = $1', [partner._id]);
+            const payouts = payoutsRes.rows;
 
-            const payouts = await Payout.find({ partner: partner._id });
-            const pendingPayouts = payouts.filter(p => p.status === 'pending').reduce((sum, p) => sum + p.amount, 0);
-            const approvedPayouts = payouts.filter(p => p.status === 'approved').reduce((sum, p) => sum + p.amount, 0);
+            const pendingPayouts = payouts.filter(p => p.status === 'pending').reduce((sum, p) => sum + parseFloat(p.amount || 0), 0);
+            const approvedPayouts = payouts.filter(p => p.status === 'approved').reduce((sum, p) => sum + parseFloat(p.amount || 0), 0);
 
             res.json({
-                ...partner.toObject(),
+                ...partner,
                 stats: {
-                    totalCodes: discounts.length,
-                    studentsCount,
+                    totalCodes: codes.length,
+                    studentsCount: parseInt(studentsCountRes.rows[0].count),
                     pendingPayouts,
                     totalEarnings: approvedPayouts
                 }
@@ -311,6 +342,7 @@ const getPartnerDetails = async (req, res) => {
             res.status(404).json({ message: 'Partner not found' });
         }
     } catch (error) {
+        console.error('[getPartnerDetails] error:', error);
         res.status(500).json({ message: error.message });
     }
 };
@@ -320,9 +352,9 @@ const getPartnerDetails = async (req, res) => {
 // @access  Private (Admin)
 const getUserById = async (req, res) => {
     try {
-        const user = await User.findById(req.params.id).select('-password');
-        if (user) {
-            res.json(user);
+        const userRes = await query('SELECT id as _id, name, email, role, profile, "discountRate", is_verified as "isVerified", created_at as "createdAt" FROM users WHERE id = $1', [req.params.id]);
+        if (userRes.rowCount > 0) {
+            res.json(userRes.rows[0]);
         } else {
             res.status(404).json({ message: 'User not found' });
         }
@@ -349,36 +381,36 @@ const getPartnerDiscounts = async (req, res) => {
 // @access  Private (Admin)
 const grantPermission = async (req, res) => {
     try {
-        const { role } = req.body;
+        const { role } = req.query; // Check both body and query for role (some clients use body, some use params/query)
+        const roleToGrant = role || req.body.role;
 
-        if (!role) {
+        if (!roleToGrant) {
             return res.status(400).json({ message: 'Role is required' });
         }
 
         const validRoles = ['student', 'university', 'partner', 'admin', 'finance'];
-        if (!validRoles.includes(role)) {
+        if (!validRoles.includes(roleToGrant)) {
             return res.status(400).json({ message: 'Invalid role specified' });
         }
 
-        const user = await User.findById(req.params.id);
-
-        if (!user) {
+        const userRes = await query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+        if (userRes.rowCount === 0) {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        // Grant permission: verify user and change role
-        user.isVerified = true;
-        user.role = role;
-
-        const updatedUser = await user.save();
+        const updatedRes = await query(
+            'UPDATE users SET is_verified = true, role = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+            [roleToGrant, req.params.id]
+        );
+        const updatedUser = updatedRes.rows[0];
 
         res.json({
-            _id: updatedUser._id,
+            _id: updatedUser.id,
             name: updatedUser.name,
             email: updatedUser.email,
             role: updatedUser.role,
-            isVerified: updatedUser.isVerified,
-            message: `Successfully granted ${role} permission`
+            isVerified: updatedUser.is_verified,
+            message: `Successfully granted ${roleToGrant} permission`
         });
     } catch (error) {
         console.error('Grant permission error:', error);
@@ -391,24 +423,23 @@ const grantPermission = async (req, res) => {
 // @access  Private (Admin)
 const revokePermission = async (req, res) => {
     try {
-        const user = await User.findById(req.params.id);
-
-        if (!user) {
+        const userRes = await query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+        if (userRes.rowCount === 0) {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        // Revoke permission: unverify and set to student
-        user.isVerified = false;
-        user.role = 'student';
-
-        const updatedUser = await user.save();
+        const updatedRes = await query(
+            "UPDATE users SET is_verified = false, role = 'student', updated_at = NOW() WHERE id = $1 RETURNING *",
+            [req.params.id]
+        );
+        const updatedUser = updatedRes.rows[0];
 
         res.json({
-            _id: updatedUser._id,
+            _id: updatedUser.id,
             name: updatedUser.name,
             email: updatedUser.email,
             role: updatedUser.role,
-            isVerified: updatedUser.isVerified,
+            isVerified: updatedUser.is_verified,
             message: 'Permission revoked successfully'
         });
     } catch (error) {
@@ -561,24 +592,24 @@ const deleteStudent = async (req, res) => {
 // @access  Private (Admin)
 const deleteUser = async (req, res) => {
     try {
-        const user = await User.findById(req.params.id);
+        const userRes = await query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+        const user = userRes.rows[0];
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
 
         // Prevent deleting yourself
-        if (user._id.toString() === req.user._id.toString()) {
+        if (user.id === req.user.id) {
             return res.status(400).json({ message: 'You cannot delete your own account' });
         }
 
-        await User.deleteOne({ _id: req.params.id });
+        await query('DELETE FROM users WHERE id = $1', [req.params.id]);
 
         // Notify via WebSocket
-        const socketService = require('../services/SocketService');
         socketService.notifyUserListUpdate('deleted', user);
 
-        res.json({ message: 'User deleted successfully', user: { _id: user._id, name: user.name, email: user.email } });
+        res.json({ message: 'User deleted successfully', user: { _id: user.id, name: user.name, email: user.email } });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -591,8 +622,8 @@ const deleteUser = async (req, res) => {
 // @access  Private (Admin)
 async function getPartnerLogos(req, res) {
     try {
-        const logos = await PartnerLogo.find().sort({ order: 1, createdAt: 1 });
-        res.json(logos);
+        const logos = await query('SELECT id as _id, name, logo, type, location, students, programs, "order", is_active as "isActive", created_at as "createdAt" FROM partner_logos ORDER BY "order" ASC, created_at ASC');
+        res.json(logos.rows);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -605,18 +636,12 @@ async function createPartnerLogo(req, res) {
     try {
         const { name, order, type, logo: logoUrl, location, students, programs } = req.body;
 
-        const logo = await PartnerLogo.create({
-            name,
-            logo: logoUrl,
-            type: type || 'corporate',
-            location,
-            students,
-            programs,
-            order: order || 0,
-            isActive: true
-        });
+        const result = await query(
+            'INSERT INTO partner_logos (name, logo, type, location, students, programs, "order", is_active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id as _id, name, logo, type, location, students, programs, "order", is_active as "isActive"',
+            [name, logoUrl, type || 'corporate', location, students, programs, order || 0, true]
+        );
 
-        res.status(201).json(logo);
+        res.status(201).json(result.rows[0]);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -629,23 +654,16 @@ async function updatePartnerLogo(req, res) {
     try {
         const { name, order, isActive, type, logo: logoUrl, location, students, programs } = req.body;
 
-        const logo = await PartnerLogo.findById(req.params.id);
+        const result = await query(
+            'UPDATE partner_logos SET name = COALESCE($1, name), logo = COALESCE($2, logo), type = COALESCE($3, type), location = COALESCE($4, location), students = COALESCE($5, students), programs = COALESCE($6, programs), "order" = COALESCE($7, "order"), is_active = COALESCE($8, is_active), updated_at = NOW() WHERE id = $9 RETURNING id as _id, name, logo, type, location, students, programs, "order", is_active as "isActive"',
+            [name, logoUrl, type, location, students, programs, order, isActive, req.params.id]
+        );
 
-        if (!logo) {
+        if (result.rowCount === 0) {
             return res.status(404).json({ message: 'Partner logo not found' });
         }
 
-        logo.name = name || logo.name;
-        logo.logo = logoUrl !== undefined ? logoUrl : logo.logo;
-        logo.type = type || logo.type;
-        logo.location = location !== undefined ? location : logo.location;
-        logo.students = students !== undefined ? students : logo.students;
-        logo.programs = programs !== undefined ? programs : logo.programs;
-        logo.order = order !== undefined ? order : logo.order;
-        logo.isActive = isActive !== undefined ? isActive : logo.isActive;
-
-        const updatedLogo = await logo.save();
-        res.json(updatedLogo);
+        res.json(result.rows[0]);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -656,13 +674,12 @@ async function updatePartnerLogo(req, res) {
 // @access  Private (Admin)
 async function deletePartnerLogo(req, res) {
     try {
-        const logo = await PartnerLogo.findById(req.params.id);
+        const result = await query('DELETE FROM partner_logos WHERE id = $1', [req.params.id]);
 
-        if (!logo) {
+        if (result.rowCount === 0) {
             return res.status(404).json({ message: 'Partner logo not found' });
         }
 
-        await logo.deleteOne();
         res.json({ message: 'Partner logo removed' });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -676,8 +693,8 @@ async function deletePartnerLogo(req, res) {
 // @access  Private (Admin)
 async function getDirectors(req, res) {
     try {
-        const directors = await Director.find().sort({ order: 1, createdAt: 1 });
-        res.json(directors);
+        const directors = await query('SELECT id as _id, name, title, image, "order", is_active as "isActive", created_at as "createdAt" FROM directors ORDER BY "order" ASC, created_at ASC');
+        res.json(directors.rows);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -690,15 +707,12 @@ async function createDirector(req, res) {
     try {
         const { name, title, image, order } = req.body;
 
-        const director = await Director.create({
-            name,
-            title,
-            image,
-            order: order || 0,
-            isActive: true
-        });
+        const result = await query(
+            'INSERT INTO directors (name, title, image, "order", is_active) VALUES ($1, $2, $3, $4, $5) RETURNING id as _id, name, title, image, "order", is_active as "isActive"',
+            [name, title, image, order || 0, true]
+        );
 
-        res.status(201).json(director);
+        res.status(201).json(result.rows[0]);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -711,20 +725,16 @@ async function updateDirector(req, res) {
     try {
         const { name, title, image, order, isActive } = req.body;
 
-        const director = await Director.findById(req.params.id);
+        const result = await query(
+            'UPDATE directors SET name = COALESCE($1, name), title = COALESCE($2, title), image = COALESCE($3, image), "order" = COALESCE($4, "order"), is_active = COALESCE($5, is_active), updated_at = NOW() WHERE id = $6 RETURNING id as _id, name, title, image, "order", is_active as "isActive"',
+            [name, title, image, order, isActive, req.params.id]
+        );
 
-        if (!director) {
+        if (result.rowCount === 0) {
             return res.status(404).json({ message: 'Director not found' });
         }
 
-        director.name = name || director.name;
-        director.title = title || director.title;
-        director.image = image || director.image;
-        director.order = order !== undefined ? order : director.order;
-        director.isActive = isActive !== undefined ? isActive : director.isActive;
-
-        const updatedDirector = await director.save();
-        res.json(updatedDirector);
+        res.json(result.rows[0]);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -735,13 +745,12 @@ async function updateDirector(req, res) {
 // @access  Private (Admin)
 async function deleteDirector(req, res) {
     try {
-        const director = await Director.findById(req.params.id);
+        const result = await query('DELETE FROM directors WHERE id = $1', [req.params.id]);
 
-        if (!director) {
+        if (result.rowCount === 0) {
             return res.status(404).json({ message: 'Director not found' });
         }
 
-        await director.deleteOne();
         res.json({ message: 'Director removed' });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -753,139 +762,46 @@ async function deleteDirector(req, res) {
 // @access  Private (Admin)
 async function inviteUser(req, res) {
     try {
-        console.log('[inviteUser] Received request body:', req.body);
         const { name, email, password, role, universityId } = req.body;
         const normalizedEmail = email ? email.toLowerCase().trim() : '';
-        const normalizedName = name ? name.trim() : '';
 
-        console.log('[inviteUser] Validation check:', {
-            name: !!normalizedName,
-            email: !!normalizedEmail,
-            password: !!password,
-            role: !!role,
-            nameValue: normalizedName,
-            emailValue: normalizedEmail,
-            passwordLength: password?.length,
-            roleValue: role
-        });
-
-        if (!normalizedName || !normalizedEmail || !password || !role) {
-            console.log('[inviteUser] Validation failed - missing required fields');
-            return res.status(400).json({
-                message: 'Please provide all required fields',
-                debug: { name: !!normalizedName, email: !!normalizedEmail, password: !!password, role: !!role }
-            });
+        // Check if user exists in PG
+        const exists = await query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
+        if (exists.rows.length > 0) {
+            return res.status(400).json({ message: 'User already exists' });
         }
 
-        // Check if user already exists
-        const userExists = await User.findOne({ email: normalizedEmail });
-        if (userExists) {
-            console.log('[inviteUser] User already exists:', normalizedEmail);
-            return res.status(400).json({ message: `A user with email ${normalizedEmail} already exists` });
-        }
+        const hashedPassword = await bcrypt.hash(password, 8);
+        const newId = `user_${Date.now()}`;
 
-        // Create the user
-        console.log('[inviteUser] Creating user with data:', {
-            name: normalizedName,
-            email: normalizedEmail,
-            role,
-            universityId: universityId || undefined
-        });
-        const user = await User.create({
-            name: normalizedName,
-            email: normalizedEmail,
-            password,
-            role,
-            universityId: universityId || undefined,
-            isVerified: true
-        });
+        await query(`
+            INSERT INTO users (id, name, email, password, role, "universityId", is_verified, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, true, NOW(), NOW())
+        `, [newId, name, normalizedEmail, hashedPassword, role, universityId || null]);
 
-        console.log('[inviteUser] User created successfully:', user._id);
-
-        // Notify all admins via WebSocket that a new user was created
-        socketService.notifyUserListUpdate('created', user);
-
-        // Send invitation email
+        // Email notification
         try {
-            // Customize subject based on role
-            let emailSubject = 'Welcome to SkillDad - Your Account Has Been Created';
-            if (role === 'partner' || role === 'b2b') {
-                emailSubject = 'Welcome to SkillDad - B2B Partner Account Created';
-            } else if (role === 'university') {
-                emailSubject = 'Welcome to SkillDad - University Partner Account Created';
-            } else if (role === 'instructor') {
-                emailSubject = 'Welcome to SkillDad - Instructor Account Created';
-            }
-
-            console.log('[inviteUser] Attempting to send email to:', user.email);
-            console.log('[inviteUser] Email subject:', emailSubject);
-            console.log('[inviteUser] CLIENT_URL:', process.env.CLIENT_URL);
-
             await sendEmail({
-                email: user.email,
-                subject: emailSubject,
-                message: `Hello ${user.name},\n\nWelcome to SkillDad! You have been invited to join our platform as a ${user.role}.\n\nYour login credentials:\nUsername (Email): ${user.email}\nTemporary Password: ${password}\n\nPlease login and change your password immediately.\n\nLogin URL: ${process.env.CLIENT_URL || 'http://localhost:5173'}/login`,
-                html: emailTemplates.invitation(user.name, user.role, user.email, password)
+                email: normalizedEmail,
+                subject: 'Account Created - SkillDad',
+                html: emailTemplates.invitation(name, role, normalizedEmail, password)
             });
-
-            console.log('[inviteUser] Email sent successfully to:', user.email);
-        } catch (emailError) {
-            console.error('[inviteUser] Failed to send invitation email:', emailError);
-            console.error('[inviteUser] Email error details:', {
-                message: emailError.message,
-                code: emailError.code,
-                command: emailError.command,
-                stack: emailError.stack
-            });
-            console.error('[inviteUser] Email configuration check:', {
-                hasEmailHost: !!process.env.EMAIL_HOST,
-                hasEmailUser: !!process.env.EMAIL_USER,
-                hasEmailPassword: !!process.env.EMAIL_PASSWORD,
-                emailHost: process.env.EMAIL_HOST ? process.env.EMAIL_HOST.substring(0, 10) + '...' : 'NOT SET',
-                emailUser: process.env.EMAIL_USER ? process.env.EMAIL_USER.substring(0, 5) + '...' : 'NOT SET'
-            });
-            // We tell the admin the user was created but email failed
-            return res.status(201).json({
-                message: 'User created successfully, but invitation email failed to send. Please provide credentials manually.',
-                user: {
-                    _id: user._id,
-                    name: user.name,
-                    email: user.email,
-                    role: user.role
-                },
-                credentials: {
-                    email: user.email,
-                    temporaryPassword: password
-                },
-                emailError: emailError.message
-            });
+        } catch (err) {
+            console.error('Invite email failed:', err.message);
         }
 
-        res.status(201).json({
-            message: 'User invited and email sent successfully',
-            user: {
-                _id: user._id,
-                name: user.name,
-                email: user.email,
-                role: user.role
-            }
-        });
+        res.status(201).json({ success: true, message: 'User invited successfully' });
     } catch (error) {
-        if (error.code === 11000) {
-            return res.status(400).json({ message: 'A user with this email or ID already exists' });
-        }
         console.error('Invite user error:', error);
-        res.status(500).json({ message: error.message || 'Server error inviting user' });
+        res.status(500).json({ message: error.message });
     }
 }
 
 // @desc    Get all universities
-// @route   GET /api/admin/universities
-// @access  Private (Admin)
 async function getUniversities(req, res) {
     try {
-        const universities = await User.find({ role: 'university' }).populate('assignedCourses').select('name profile assignedCourses');
-        res.json(universities);
+        const resSet = await query("SELECT id as _id, name, profile FROM users WHERE role = 'university'");
+        res.json(resSet.rows);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
